@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
@@ -197,11 +198,14 @@ namespace TerraNilTrainer
     internal sealed class ManagerForm : Form
     {
         private TextBox folder, info;
-        private Button install, uninstall, launch;
+        private Button install, uninstall, launch, inspect, browse;
+        private Label checkStatus;
+        private bool inspecting;
+        private int checkNumber;
         private string Payload { get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "载荷"); } }
         public ManagerForm()
         {
-            Text = "伊始之地 · 中文修改器安装与管理";
+            Text = "伊始之地 · 中文修改器安装与管理（按钮反馈修正版）";
             Font = new Font("Microsoft YaHei UI", 10);
             StartPosition = FormStartPosition.CenterScreen;
             ClientSize = new Size(760, 570);
@@ -213,13 +217,16 @@ namespace TerraNilTrainer
             Controls.Add(new Label { Text = "游戏目录", Location = new Point(26, 119), AutoSize = true });
             folder = new TextBox { Text = @"D:\SteamLibrary\steamapps\common\Terra Nil", Location = new Point(110, 114), Size = new Size(510, 28) };
             Controls.Add(folder);
-            Button browse = new Button { Text = "选择目录", Location = new Point(628, 112), Size = new Size(106, 33) };
+            browse = new Button { Text = "选择目录", Location = new Point(628, 112), Size = new Size(106, 33) };
             browse.Click += delegate { using (FolderBrowserDialog dialog = new FolderBrowserDialog { Description = "选择包含 Terra Nil.exe 的游戏目录", SelectedPath = folder.Text }) if (dialog.ShowDialog(this) == DialogResult.OK) { folder.Text = dialog.SelectedPath; Inspect(); } };
             Controls.Add(browse);
             Controls.Add(new Label { Text = "六项功能：设置叶子货币、灌溉范围、回收范围、建筑范围、任意位置建造、忽略建造条件。\r\n安装仅添加插件和加载框架；安装前自动备份本地存档。范围倍率为 1 到 5 倍。", Location = new Point(26, 162), Size = new Size(710, 64) });
-            info = new TextBox { ReadOnly = true, Multiline = true, ScrollBars = ScrollBars.Vertical, Location = new Point(26, 236), Size = new Size(708, 225), BackColor = Color.White };
+            checkStatus = new Label { Text = "尚未检查：点击“检查与预览”开始。", Location = new Point(26, 234), Size = new Size(708, 29), Font = new Font(Font, FontStyle.Bold), ForeColor = Color.DimGray };
+            Controls.Add(checkStatus);
+            info = new TextBox { ReadOnly = true, Multiline = true, ScrollBars = ScrollBars.Vertical, Location = new Point(26, 269), Size = new Size(708, 192), BackColor = Color.White,
+                Text = "点击下方“检查与预览”，检查游戏目录与版本。\r\n检查只读取文件；完成后会显示结果和下一步操作。" };
             Controls.Add(info);
-            Button inspect = MakeButton("检查与预览", 26, delegate { Inspect(); });
+            inspect = MakeButton("检查与预览", 26, delegate { Inspect(); });
             install = MakeButton("安装修改器", 204, delegate { Execute(delegate {
                 string savePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "AppData", "LocalLow", "Free Lives", "Terra Nil");
                 return InstallEngine.Install(folder.Text, Payload, savePath); }); });
@@ -231,7 +238,6 @@ namespace TerraNilTrainer
                 Process.Start(new ProcessStartInfo("steam://run/1593030") { UseShellExecute = true });
                 return "已向游戏平台提交启动请求。进入游戏后按 F8 打开面板。"; }); });
             Controls.Add(new Label { Text = "卸载不回退已保存的货币与地形变化。恢复存档前请退出游戏，并保留当前存档副本。", Location = new Point(26, 535), Size = new Size(720, 25) });
-            Shown += delegate { Inspect(); };
         }
         private Button MakeButton(string title, int x, Action action)
         {
@@ -250,15 +256,53 @@ namespace TerraNilTrainer
         }
         private void Inspect()
         {
-            try
+            if (inspecting) return;
+            inspecting = true;
+            int number = ++checkNumber;
+            string root = folder.Text;
+            inspect.Text = "正在检查……";
+            inspect.Enabled = install.Enabled = uninstall.Enabled = launch.Enabled = browse.Enabled = folder.Enabled = false;
+            Cursor = Cursors.WaitCursor;
+            checkStatus.ForeColor = Color.DarkBlue;
+            checkStatus.Text = "第 " + number + " 次检查：正在核对目录和游戏版本……";
+            info.Text = "正在检查：\r\n" + root + "\r\n\r\n检查在后台执行，窗口仍可移动和关闭。";
+            BackgroundWorker worker = new BackgroundWorker();
+            worker.DoWork += delegate(object sender, DoWorkEventArgs e)
             {
-                InstallEngine.CheckGame(folder.Text);
-                bool installed = File.Exists(InstallEngine.Inside(folder.Text, InstallEngine.MarkerDirectory + "/installed.tsv"));
-                info.Text = "游戏版本校验通过。\r\n游戏目录：" + Path.GetFullPath(folder.Text) + "\r\n" +
+                InstallEngine.CheckGame(root);
+                bool installed = File.Exists(InstallEngine.Inside(root, InstallEngine.MarkerDirectory + "/installed.tsv"));
+                e.Result = "游戏版本校验通过。\r\n游戏目录：" + Path.GetFullPath(root) + "\r\n" +
                     (installed ? "已找到本工具安装记录。可直接启动游戏，或退出游戏后卸载。" : "当前尚未安装。本次检查没有写入游戏目录。\r\n点击“安装修改器”将添加加载框架及插件，并备份本地存档。") +
                     "\r\n\r\n安装后：\r\n1. 正常启动游戏。\r\n2. F8 打开/隐藏面板。\r\n3. 进入关卡后设置货币；选择倍率或开关。\r\n4. 隐藏面板后建造或回收。\r\n\r\n全部功能初始关闭，每次重启恢复默认。";
-            }
-            catch (Exception ex) { info.Text = "检查结果：\r\n" + ex.Message; }
+            };
+            worker.RunWorkerCompleted += delegate(object sender, RunWorkerCompletedEventArgs e)
+            {
+                try
+                {
+                    if (IsDisposed || Disposing) return;
+                    string time = DateTimeOffset.UtcNow.ToOffset(TimeSpan.FromHours(8)).ToString("HH:mm:ss");
+                    if (e.Error != null)
+                    {
+                        checkStatus.ForeColor = Color.Firebrick;
+                        checkStatus.Text = "第 " + number + " 次检查未通过（北京时间 " + time + "）。";
+                        info.Text = "检查未通过：\r\n" + e.Error.GetBaseException().Message + "\r\n\r\n请确认上方选的是包含 Terra Nil.exe 的游戏目录。";
+                    }
+                    else
+                    {
+                        checkStatus.ForeColor = Color.DarkGreen;
+                        checkStatus.Text = "第 " + number + " 次检查通过（北京时间 " + time + "）；详细结果如下。";
+                        info.Text = (string)e.Result;
+                    }
+                    info.SelectionStart = 0;
+                    info.SelectionLength = 0;
+                    info.ScrollToCaret();
+                    inspect.Text = "重新检查与预览";
+                    inspect.Enabled = install.Enabled = uninstall.Enabled = launch.Enabled = browse.Enabled = folder.Enabled = true;
+                    Cursor = Cursors.Default;
+                }
+                finally { inspecting = false; worker.Dispose(); }
+            };
+            worker.RunWorkerAsync();
         }
     }
     internal static class Program

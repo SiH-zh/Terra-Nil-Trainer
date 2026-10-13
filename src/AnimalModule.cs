@@ -37,6 +37,9 @@ namespace TerraNilTrainer
         internal static bool LockMood;
         internal static int ActivityFactor = 1;
         [ThreadStatic] private static int rawScoreDepth;
+        [ThreadStatic] private static AnimalGroup updatingMoodGroup;
+        private static readonly HashSet<AnimalGroup> individuallyKept = new HashSet<AnimalGroup>();
+        private static GameState individualMoodState;
         private static readonly FieldInfo DespawnTime = AccessTools.Field(typeof(AnimalGroup), "_despawnAtTime");
         private static readonly MethodInfo HappinessListeners = AccessTools.Method(typeof(AnimalGroup), "UpdateHappinessListeners");
         private readonly TrainerPlugin host;
@@ -86,13 +89,23 @@ namespace TerraNilTrainer
         { return groups.OrderBy(g => SpeciesName(g.type), StringComparer.Ordinal).ThenBy(GroupName, StringComparer.Ordinal).ThenBy(g => g.TerritoryCenter.x).ThenBy(g => g.TerritoryCenter.y).ToArray(); }
         internal static void MoodCalculationPostfix(bool forSpawning, ref AnimalNeed.State happinessState, ref float __result)
         {
-            if (!TrainerPlugin.Ready || !LockMood || forSpawning || rawScoreDepth > 0) return;
+            if (!TrainerPlugin.Ready || forSpawning || rawScoreDepth > 0 || (!LockMood && !IsIndividuallyKept(updatingMoodGroup))) return;
+            if (updatingMoodGroup != null && updatingMoodGroup.WantsToDespawnNowEvenInZenMode) return;
             __result = 1f;
             happinessState = AnimalNeed.State.Ideal;
         }
+        internal static void MoodUpdatePrefix(AnimalGroup __instance, out AnimalGroup __state)
+        { __state = updatingMoodGroup; updatingMoodGroup = __instance; }
+        internal static Exception MoodUpdateFinalizer(Exception __exception, AnimalGroup __state)
+        { updatingMoodGroup = __state; return __exception; }
         internal static void MoodUpdatePostfix(AnimalGroup __instance)
         {
-            if (TrainerPlugin.Ready && LockMood) SetFullMood(__instance, true);
+            if (TrainerPlugin.Ready && (LockMood || IsIndividuallyKept(__instance))) SetFullMood(__instance, true);
+        }
+        public static bool IsIndividuallyKept(AnimalGroup group)
+        {
+            return group != null && individuallyKept.Contains(group) && !group.WantsToDespawnNowEvenInZenMode &&
+                Object.ReferenceEquals(individualMoodState, TrainerPlugin.CurrentState());
         }
         public static bool SetFullMood(AnimalGroup group, bool updateVisuals)
         {
@@ -230,11 +243,33 @@ namespace TerraNilTrainer
         {
             LockMood = enabled;
             fillAllQueued = enabled;
-            message = enabled ? "持续满心情已开启：当前及新出现的兽群将保持 100%。" : "持续满心情已关闭，后续按栖息地重新计算。";
+            message = enabled ? "全体持续满心情已开启：当前及新出现的兽群将保持 100%。" : "全体保持已关闭；已单独开启保持的具名兽群仍生效，其余按栖息地计算。";
             host.ReportStatus(message);
+        }
+        public bool SetGroupMoodKeeping(AnimalGroup group, bool enabled)
+        {
+            GameState state = TrainerPlugin.CurrentState();
+            if (!Object.ReferenceEquals(individualMoodState, state)) { individuallyKept.Clear(); individualMoodState = state; }
+            if (enabled)
+            {
+                if (!TrainerPlugin.Ready || group == null || !Groups().Contains(group)) return false;
+                individuallyKept.Add(group); nextLockRefresh = 0f;
+            }
+            else individuallyKept.Remove(group);
+            message = GroupLabel(group) + (enabled ? "：已开启单独满心情保持。" : LockMood ? "：已取消单独保持；全体保持仍开启。" : "：已取消单独保持，恢复按栖息地计算。");
+            host.ReportStatus(message);
+            return true;
         }
         public void Update()
         {
+            GameState currentState = TrainerPlugin.CurrentState();
+            if (!Object.ReferenceEquals(individualMoodState, currentState))
+            {
+                if (individuallyKept.Count > 0) message = "关卡状态已切换：单独兽群保持已清空，请按名字重新选择。";
+                individuallyKept.Clear(); individualMoodState = currentState;
+            }
+            if (currentState != null && currentState.animalState != null)
+                individuallyKept.RemoveWhere(g => !currentState.animalState.ContainsGroup(g) || g.WantsToDespawnNowEvenInZenMode);
             if (scanState != null && !Object.ReferenceEquals(scanState, TrainerPlugin.CurrentState())) ResetScan("关卡已切换，旧推荐已清除。");
             if (!scanning && scanState != null && Time.realtimeSinceStartup >= nextValidityCheck)
             {
@@ -242,10 +277,10 @@ namespace TerraNilTrainer
                 if (!scanState.animalState.ContainsGroup(scanGroup)) ResetScan("原种群已离开或合并，请按名字重新选择。");
                 else if (completedSignature != EnvironmentSignature(scanState)) { stale = true; scanMessage = "地图或领地已变化：标记是旧预测，请重新扫描。"; }
             }
-            if (fillAllQueued || (LockMood && Time.realtimeSinceStartup >= nextLockRefresh))
+            if (fillAllQueued || ((LockMood || individuallyKept.Count > 0) && Time.realtimeSinceStartup >= nextLockRefresh))
             {
                 int count = 0;
-                foreach (AnimalGroup group in Groups()) if (SetFullMood(group, true)) count++;
+                foreach (AnimalGroup group in Groups()) if ((LockMood || IsIndividuallyKept(group)) && SetFullMood(group, true)) count++;
                 if (fillAllQueued)
                 {
                     message = count > 0 ? "已将当前 " + count + " 个兽群拉满，持续保持已开启。" : "持续保持已开启，等待关卡出现兽群。";
@@ -257,13 +292,14 @@ namespace TerraNilTrainer
             if (fillSelectedQueued)
             {
                 fillSelectedQueued = false;
-                message = Groups().Contains(selected) && SetFullMood(selected, true) ? GroupLabel(selected) + (LockMood ? " 心情已设置为 100%，全体持续保持已开启。" : " 心情已设置一次；未开启保持，会按栖息地回落。") : "选中兽群已经离开，请重新选择。";
+                message = Groups().Contains(selected) && SetFullMood(selected, true) ? GroupLabel(selected) + (LockMood || IsIndividuallyKept(selected) ? " 心情已设置为 100%，持续保持已开启。" : " 心情已设置一次；未开启保持，会按栖息地回落。") : "选中兽群已经离开，请重新选择。";
                 host.ReportStatus(message);
             }
         }
         public void Reset()
         {
             LockMood = fillAllQueued = fillSelectedQueued = false;
+            individuallyKept.Clear(); individualMoodState = null;
             message = "动物修改已关闭；心情将按栖息地重新计算。";
             ActivityFactor = 1;
             ResetScan("动物修改已关闭，推荐及地图标记已清除。");
@@ -377,8 +413,10 @@ namespace TerraNilTrainer
             GUI.enabled = TrainerPlugin.Ready;
             bool keep = GUILayout.Toggle(LockMood, " 持续保持所有兽群满心情（包含新出现的兽群）", GUILayout.Height(32));
             if (keep != LockMood) SetMoodKeeping(keep);
-            GUILayout.Label(LockMood ? "当前状态：持续保持已开启，隐藏菜单也生效。" : "当前状态：持续保持未开启，单次设置会随环境回落。");
-            GUILayout.Label("只改心情，不伪造实际需求；取消上方勾选或关闭全部修改即可停止保持。重启游戏后需重新开启。");
+            AnimalGroup[] kept = groups.Where(IsIndividuallyKept).ToArray();
+            GUILayout.Label("全体保持：" + (LockMood ? "已开启" : "未开启") + "；单独保持：" + kept.Length + " 群。隐藏菜单也生效。");
+            if (kept.Length > 0) GUILayout.Label("单独保持名单：" + String.Join("、", kept.Select(GroupLabel).ToArray()));
+            GUILayout.Label("只改心情，不伪造需求。关闭全部修改可取消所有保持；重启、读档或撤销切换关卡状态后，单独保持需重选。");
             GUILayout.Space(5);
             GUILayout.Label("动物活动范围：" + ActivityFactor + " 倍（领地容量约 " + (ActivityFactor * ActivityFactor) + " 倍）");
             int nextFactor = GUILayout.Toolbar(ActivityFactor - 1, new string[] { "1", "2", "3", "4", "5" }) + 1;
@@ -406,7 +444,7 @@ namespace TerraNilTrainer
                 groupFilter = GUILayout.TextField(groupFilter);
                 groupScroll = GUILayout.BeginScrollView(groupScroll, GUILayout.Height(140));
                 foreach (var group in groups.Where(g => String.IsNullOrEmpty(groupFilter) || GroupLabel(g).IndexOf(groupFilter, StringComparison.CurrentCultureIgnoreCase) >= 0))
-                    if (GUILayout.Button((Object.ReferenceEquals(group, selected) ? "✓ " : "") + GroupLabel(group) + "　" + group.IndividualCount + " 只"))
+                    if (GUILayout.Button((Object.ReferenceEquals(group, selected) ? "✓ " : "") + GroupLabel(group) + "　" + group.IndividualCount + " 只" + (IsIndividuallyKept(group) ? "　[单独保持]" : "")))
                     { selected = group; ResetScan("已选择 " + GroupLabel(selected) + "，请扫描候选位置。"); }
                 GUILayout.EndScrollView();
             }
@@ -420,6 +458,11 @@ namespace TerraNilTrainer
                 if (GUILayout.Button("上一群")) SelectAnother(groups, -1);
                 if (GUILayout.Button("下一群")) SelectAnother(groups, 1);
                 GUILayout.EndHorizontal();
+                if (GUILayout.Button("只将「" + GroupName(selected) + "」拉满并持续保持", GUILayout.Height(36))) SetGroupMoodKeeping(selected, true);
+                bool groupKeep = IsIndividuallyKept(selected);
+                bool keepSelected = GUILayout.Toggle(groupKeep, " 单独保持「" + GroupName(selected) + "」满心情");
+                if (keepSelected != groupKeep) SetGroupMoodKeeping(selected, keepSelected);
+                if (LockMood) GUILayout.Label("全体保持仍开启。只想保持指定兽群，请先取消上方全体保持。");
                 if (GUILayout.Button("仅选中兽群心情拉满一次")) fillSelectedQueued = true;
             }
             GUILayout.Space(5);

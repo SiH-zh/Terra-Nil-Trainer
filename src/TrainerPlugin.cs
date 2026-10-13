@@ -20,7 +20,7 @@ using Type = System.Type;
 
 namespace TerraNilTrainer
 {
-    [BepInPlugin(Id, "伊始之地中文修改器", "1.3.1")]
+    [BepInPlugin(Id, "伊始之地中文修改器", "1.3.2")]
     [BepInProcess("Terra Nil.exe")]
     public sealed class TrainerPlugin : BaseUnityPlugin
     {
@@ -34,6 +34,11 @@ namespace TerraNilTrainer
         private bool currencyQueued;
         private int queuedCurrency;
         private Rect panel = new Rect(30, 60, 510, 565);
+        private PanelEdge resizingEdge;
+        private Rect resizeStartPanel;
+        private Vector2 resizeStartMouse;
+        private int resizeControlId;
+        private bool resetPanelQueued;
         private Font chineseFont;
         private GUISkin skin;
         private Vector2 scroll;
@@ -84,7 +89,7 @@ namespace TerraNilTrainer
                 AddPatch(typeof(SelectionHandler), "PlaceCurrentBuilding", "BlockPlacementPrefix", true);
                 AddPatch(typeof(SelectionHandler), "IsOverUI", "BlockUiAtPositionPrefix", true);
                 AddPatch(typeof(SelectionHandler), "IsPointerOverUIObject", "BlockUiPrefix", true);
-                AddPatch(typeof(Model.AnimalGroup), "UpdateNeedsAndHappiness", "MoodUpdatePostfix", false, typeof(AnimalModule));
+                harmony.Patch(AccessTools.DeclaredMethod(typeof(AnimalGroup), "UpdateNeedsAndHappiness"), prefix: new HarmonyMethod(typeof(AnimalModule), "MoodUpdatePrefix"), postfix: new HarmonyMethod(typeof(AnimalModule), "MoodUpdatePostfix"), finalizer: new HarmonyMethod(typeof(AnimalModule), "MoodUpdateFinalizer"));
                 AddPatch(typeof(Data.AnimalGroupData), "CalculateNeedsAndHappiness", "MoodCalculationPostfix", false, typeof(AnimalModule));
                 AddPatch(typeof(AnimalGroup), "GetTerritoryMaxTilesBase", "TerritoryLimitPostfix", false, typeof(AnimalModule), Type.EmptyTypes);
                 AddPatch(typeof(GameController), "ExecuteCommand", "CommandPostfix", false, typeof(UndoModule));
@@ -350,6 +355,7 @@ namespace TerraNilTrainer
             if (animals != null) animals.DrawMarker();
             if (!Visible)
             {
+                CancelPanelResize();
                 if (skin != null) GUI.skin = skin;
                 if (GUI.Button(ReopenButton, new GUIContent("打开修改器", "当前快捷键：" + ShortcutLabel))) Visible = true;
                 if (Event.current.type == EventType.Repaint) lastGuiFrame = Time.frameCount;
@@ -365,14 +371,18 @@ namespace TerraNilTrainer
                 skin.box.wordWrap = skin.button.wordWrap = true;
                 skin.button.padding = new RectOffset(8, 8, 6, 6);
                 skin.window.fontSize = 20;
+                skin.window.padding = new RectOffset(12, 12, 30, 16);
             }
             GUI.skin = skin;
             float scale = GuiScale();
             Matrix4x4 old = GUI.matrix;
             GUI.matrix = Matrix4x4.Scale(new Vector3(scale, scale, 1));
-            panel.x = Mathf.Clamp(panel.x, 0, Screen.width / scale - panel.width);
-            panel.y = Mathf.Clamp(panel.y, 0, Screen.height / scale - panel.height);
-            panel = GUILayout.Window(1593030, panel, DrawPanel, "伊始之地 · 中文修改器");
+            Vector2 canvas = new Vector2(Screen.width / scale, Screen.height / scale);
+            panel = PanelResize.Clamp(panel, canvas);
+            HandlePanelResize(canvas);
+            panel = GUILayout.Window(1593030, panel, DrawPanel, "伊始之地 · 中文修改器", GUILayout.Width(panel.width), GUILayout.Height(panel.height));
+            if (resetPanelQueued) { resetPanelQueued = false; panel = PanelResize.Clamp(new Rect(30, 60, 510, 565), canvas); }
+            DrawResizeBorder();
             GUI.matrix = old;
             if (Event.current.type == EventType.Repaint)
             {
@@ -384,6 +394,10 @@ namespace TerraNilTrainer
         {
             scroll = GUILayout.BeginScrollView(scroll);
             GUILayout.Label(ShortcutLabel + " 显示/隐藏　｜　面板外正常预览和建造");
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("拖动边框或四角调整大小，拖动标题移动。");
+            if (GUILayout.Button("恢复面板大小", GUILayout.Width(128))) resetPanelQueued = true;
+            GUILayout.EndHorizontal();
             GUILayout.BeginHorizontal();
             if (GUILayout.Button(recordingKey ? "等待按键…按 Esc（退出键）取消" : "自定义快捷键"))
             {
@@ -403,7 +417,7 @@ namespace TerraNilTrainer
                 GUI.enabled = true;
                 if (GUILayout.Button("隐藏面板（" + ShortcutLabel + " 可重新打开）", GUILayout.Height(36))) Visible = false;
                 GUILayout.EndScrollView();
-                GUI.DragWindow(new Rect(0, 0, panel.width, 28));
+                GUI.DragWindow(new Rect(18, 8, panel.width - 36, 20));
                 return;
             }
             GameState state = CurrentState();
@@ -435,7 +449,48 @@ namespace TerraNilTrainer
             GUI.enabled = true;
             if (GUILayout.Button("隐藏面板（" + ShortcutLabel + " 可重新打开）", GUILayout.Height(36))) Visible = false;
             GUILayout.EndScrollView();
-            GUI.DragWindow(new Rect(0, 0, panel.width, 28));
+            GUI.DragWindow(new Rect(18, 8, panel.width - 36, 20));
+        }
+        private void CancelPanelResize()
+        {
+            if (resizingEdge == PanelEdge.None) return;
+            if (GUIUtility.hotControl == resizeControlId) GUIUtility.hotControl = 0;
+            resizingEdge = PanelEdge.None;
+            guiHasCapture = false;
+        }
+        private void HandlePanelResize(Vector2 canvas)
+        {
+            Event input = Event.current;
+            int id = GUIUtility.GetControlID(1593032, FocusType.Passive);
+            if (resizingEdge != PanelEdge.None)
+            {
+                if (input.type == EventType.MouseDrag)
+                {
+                    panel = PanelResize.Drag(resizeStartPanel, input.mousePosition - resizeStartMouse, resizingEdge, canvas);
+                    input.Use();
+                }
+                else if ((input.type == EventType.MouseUp && input.button == 0) || input.type == EventType.Ignore)
+                { CancelPanelResize(); if (input.type == EventType.MouseUp) input.Use(); }
+                return;
+            }
+            if (input.type != EventType.MouseDown || input.button != 0 || GUIUtility.hotControl != 0) return;
+            PanelEdge edge = PanelResize.Hit(panel, input.mousePosition);
+            if (edge == PanelEdge.None) return;
+            resizingEdge = edge; resizeStartPanel = panel; resizeStartMouse = input.mousePosition;
+            resizeControlId = id; GUIUtility.hotControl = id; input.Use();
+        }
+        private void DrawResizeBorder()
+        {
+            if (Event.current.type != EventType.Repaint) return;
+            PanelEdge hover = resizingEdge != PanelEdge.None ? resizingEdge : PanelResize.Hit(panel, Event.current.mousePosition);
+            Color previous = GUI.color;
+            GUI.color = hover == PanelEdge.None ? new Color(0.45f, 0.65f, 0.72f, 0.6f) : new Color(0.3f, 0.9f, 1f, 1f);
+            GUI.DrawTexture(new Rect(panel.x, panel.y, panel.width, 2), Texture2D.whiteTexture);
+            GUI.DrawTexture(new Rect(panel.x, panel.yMax - 2, panel.width, 2), Texture2D.whiteTexture);
+            GUI.DrawTexture(new Rect(panel.x, panel.y, 2, panel.height), Texture2D.whiteTexture);
+            GUI.DrawTexture(new Rect(panel.xMax - 2, panel.y, 2, panel.height), Texture2D.whiteTexture);
+            GUI.Label(new Rect(panel.xMax - 18, panel.yMax - 21, 18, 21), "◢");
+            GUI.color = previous;
         }
         private int FactorRow(string label, int factor)
         {
@@ -526,7 +581,7 @@ namespace TerraNilTrainer
         private static bool OverlayContainsScreenPoint(Vector2 point)
         {
             if (Instance == null || Screen.width <= 0 || Screen.height <= 0 || Time.frameCount - Instance.lastGuiFrame > 2) return false;
-            if (Instance.guiHasCapture) return true;
+            if (Instance.guiHasCapture || Instance.resizingEdge != PanelEdge.None) return true;
             point.y = Screen.height - point.y;
             return Visible ? Instance.panel.Contains(point / GuiScale()) : ReopenButton.Contains(point);
         }

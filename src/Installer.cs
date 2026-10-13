@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -123,9 +123,9 @@ namespace TerraNilTrainer
                     if (Hash(target) != f[1]) throw new IOException("写入校验失败：" + f[0]);
                 }
                 File.WriteAllText(Inside(root, MarkerDirectory + "/安装记录.txt"),
-                    "伊始之地中文修改器 1.1.0\r\n适配构建：22566272\r\n原始游戏代码未替换。\r\n" +
+                    "伊始之地中文修改器 1.2.0\r\n适配构建：22566272\r\n原始游戏代码未替换。\r\n" +
                     "存档备份来源：" + savePath + "\r\n备份文件数：" + saveCount + "\r\n备份目录：" + backup + "\r\n", new UTF8Encoding(true));
-                return "安装完成。照常启动游戏，按 F8 打开面板。\r\n" + (saveCount > 0 ? "已备份 " + saveCount + " 个存档文件：\r\n" + backup : "未找到可备份的本地存档；首次游玩通常还没有存档。") + "\r\n全部修改默认关闭。";
+                return "安装完成。照常启动游戏，按 F6 打开面板。\r\n" + (saveCount > 0 ? "已备份 " + saveCount + " 个存档文件：\r\n" + backup : "未找到可备份的本地存档；首次游玩通常还没有存档。") + "\r\n全部修改默认关闭。";
             }
             catch
             {
@@ -160,7 +160,7 @@ namespace TerraNilTrainer
             if (File.Exists(target))
             {
                 if (oldRecord == null || Hash(target) != oldRecord[1]) throw new IOException("现有插件已被其他程序修改，拒绝覆盖。请先核对插件文件。");
-                if (oldRecord[1] == newRecord[1]) return "当前已是相同插件版本，无需重复安装。\r\n照常启动游戏，按 F8 打开面板。";
+                if (oldRecord[1] == newRecord[1]) return "当前已是相同插件版本，无需重复安装。\r\n照常启动游戏，按 F6 打开面板。";
             }
             foreach (string required in new string[] { "BepInEx/core/BepInEx.dll", "BepInEx/core/0Harmony.dll" })
             {
@@ -205,7 +205,7 @@ namespace TerraNilTrainer
                 File.Copy(oldManifest, manifest, true);
                 throw;
             }
-            return "插件安装／升级完成。新增动物心情及迁移推荐功能。\r\n启动游戏后按 F8，切换到“动物心情与迁移”。\r\n旧插件、安装记录及找到的当前存档已备份到：\r\n" + backup + "\r\n升级没有替换共享加载框架。";
+            return "插件安装／升级完成。已加入自定义快捷键，保留动物与建造功能。\r\n面板默认使用 F6，可在工具或游戏内设置其他按键。\r\n旧插件、安装记录及找到的当前存档已备份到：\r\n" + backup + "\r\n升级没有替换共享加载框架。";
         }
         private static void CleanEmptyDirectories(string root, List<string[]> files)
         {
@@ -257,54 +257,103 @@ namespace TerraNilTrainer
             CleanEmptyDirectories(root, remove);
             return "修改器已卸载。" + (others ? "检测到其他插件，共享加载框架已保留。" : "加载入口已移走。") + "\r\n存档及备份已保留。卸载文件可从以下目录找回：\r\n" + recovery;
         }
+        public static string ConfigureShortcut(string root, string payload, ShortcutChoice choice)
+        {
+            CheckGame(root);
+            EnsureClosed(root);
+            const string relative = "BepInEx/plugins/TerraNilTrainer/TerraNilTrainer.dll";
+            string plugin = Inside(root, relative), supplied = Inside(payload, relative);
+            if (!File.Exists(plugin) || !File.Exists(supplied) || Hash(plugin) != Hash(supplied))
+                throw new IOException("请先点击“安装／更新修改器”安装本版，再保存快捷键。");
+            string config = Inside(root, ShortcutSettings.RelativePath);
+            RejectLinks(root, config);
+            if (File.Exists(config))
+            {
+                string backup = Inside(root, MarkerDirectory + "/快捷键备份-" + DateTime.UtcNow.Ticks + "/原配置.cfg");
+                Directory.CreateDirectory(Path.GetDirectoryName(backup));
+                File.Copy(config, backup, false);
+            }
+            ShortcutSettings.Write(config, choice);
+            return "面板快捷键已保存为 " + choice.Describe() + "。\r\n下一次启动游戏时生效。";
+        }
     }
     internal sealed class ManagerForm : Form
     {
         private TextBox folder, info;
         private Button install, uninstall, launch, inspect, browse;
         private Label checkStatus;
+        private ComboBox hotkey;
+        private CheckBox hotkeyControl, hotkeyShift, hotkeyAlt;
+        private Button saveHotkey;
         private bool inspecting;
         private int checkNumber;
         private string Payload { get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "载荷"); } }
         public ManagerForm()
         {
-            Text = "伊始之地 · 中文修改器安装与管理（动物版 1.1.0）";
+            Text = "伊始之地 · 中文修改器安装与管理（自定义快捷键版 1.2.0）";
             Font = new Font("Microsoft YaHei UI", 10);
             StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(760, 570);
+            ClientSize = new Size(760, 625);
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             Label heading = new Label { Text = "伊始之地中文修改器", Font = new Font(Font.FontFamily, 20, FontStyle.Bold), Location = new Point(24, 20), AutoSize = true };
             Controls.Add(heading);
-            Controls.Add(new Label { Text = "适配当前构建 22566272　｜　安装后随游戏加载　｜　F8 打开中文面板", Location = new Point(26, 72), Size = new Size(720, 30) });
+            Controls.Add(new Label { Text = "适配当前构建 22566272　｜　默认 F6 打开面板　｜　支持单键及组合键", Location = new Point(26, 72), Size = new Size(720, 30) });
             Controls.Add(new Label { Text = "游戏目录", Location = new Point(26, 119), AutoSize = true });
             folder = new TextBox { Text = @"D:\SteamLibrary\steamapps\common\Terra Nil", Location = new Point(110, 114), Size = new Size(510, 28) };
             Controls.Add(folder);
             browse = new Button { Text = "选择目录", Location = new Point(628, 112), Size = new Size(106, 33) };
             browse.Click += delegate { using (FolderBrowserDialog dialog = new FolderBrowserDialog { Description = "选择包含 Terra Nil.exe 的游戏目录", SelectedPath = folder.Text }) if (dialog.ShowDialog(this) == DialogResult.OK) { folder.Text = dialog.SelectedPath; Inspect(); } };
             Controls.Add(browse);
-            Controls.Add(new Label { Text = "功能：货币、三类范围、建造限制；新增动物心情拉满、持续保持与迁移位置推荐。\r\n首次安装自动备份存档；已有本工具安装记录时可直接升级插件，保留旧插件备份。", Location = new Point(26, 162), Size = new Size(710, 64) });
-            checkStatus = new Label { Text = "尚未检查：点击“检查与预览”开始。", Location = new Point(26, 234), Size = new Size(708, 29), Font = new Font(Font, FontStyle.Bold), ForeColor = Color.DimGray };
+            Controls.Add(new Label { Text = "面板快捷键", Location = new Point(26, 164), AutoSize = true });
+            hotkey = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(114, 159), Size = new Size(90, 30) };
+            foreach (string key in ShortcutSettings.AllowedKeys()) hotkey.Items.Add(new ShortcutOption(key));
+            Controls.Add(hotkey);
+            hotkeyControl = new CheckBox { Text = "Ctrl 控制键", Location = new Point(215, 159), Size = new Size(112, 30) };
+            hotkeyShift = new CheckBox { Text = "Shift 上档键", Location = new Point(327, 159), Size = new Size(121, 30) };
+            hotkeyAlt = new CheckBox { Text = "Alt 交替键", Location = new Point(448, 159), Size = new Size(110, 30) };
+            Controls.Add(hotkeyControl); Controls.Add(hotkeyShift); Controls.Add(hotkeyAlt);
+            saveHotkey = new Button { Text = "保存快捷键", Location = new Point(560, 157), Size = new Size(174, 34) };
+            saveHotkey.Click += delegate { Execute(delegate { return InstallEngine.ConfigureShortcut(folder.Text, Payload, SelectedShortcut()); }); };
+            Controls.Add(saveHotkey);
+            Controls.Add(new Label { Text = "也可在游戏面板中点击“自定义快捷键”录制。此处保存后，下次启动游戏生效。", Location = new Point(26, 198), Size = new Size(710, 30) });
+            Controls.Add(new Label { Text = "功能：货币、三类范围、建造限制；动物心情拉满、持续保持与迁移位置推荐。\r\n首次安装自动备份存档；已有本工具安装记录时可直接升级插件，保留旧插件备份。", Location = new Point(26, 233), Size = new Size(710, 57) });
+            checkStatus = new Label { Text = "尚未检查：点击“检查与预览”开始。", Location = new Point(26, 297), Size = new Size(708, 29), Font = new Font(Font, FontStyle.Bold), ForeColor = Color.DimGray };
             Controls.Add(checkStatus);
-            info = new TextBox { ReadOnly = true, Multiline = true, ScrollBars = ScrollBars.Vertical, Location = new Point(26, 269), Size = new Size(708, 192), BackColor = Color.White,
+            info = new TextBox { ReadOnly = true, Multiline = true, ScrollBars = ScrollBars.Vertical, Location = new Point(26, 335), Size = new Size(708, 169), BackColor = Color.White,
                 Text = "点击下方“检查与预览”，检查游戏目录与版本。\r\n检查只读取文件；完成后会显示结果和下一步操作。" };
             Controls.Add(info);
             inspect = MakeButton("检查与预览", 26, delegate { Inspect(); });
             install = MakeButton("安装／更新修改器", 204, delegate { Execute(delegate {
                 string savePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "AppData", "LocalLow", "Free Lives", "Terra Nil");
-                return InstallEngine.Install(folder.Text, Payload, savePath); }); });
+                string result = InstallEngine.Install(folder.Text, Payload, savePath);
+                return result + "\r\n\r\n" + InstallEngine.ConfigureShortcut(folder.Text, Payload, SelectedShortcut()); }); });
             uninstall = MakeButton("卸载修改器", 382, delegate { Execute(delegate { return InstallEngine.Uninstall(folder.Text); }); });
             launch = MakeButton("启动游戏", 560, delegate { Execute(delegate {
                 string exe = InstallEngine.Inside(folder.Text, "Terra Nil.exe");
                 if (!File.Exists(exe)) throw new IOException("未找到游戏程序。");
                 // 使用游戏平台原有启动流程。
                 Process.Start(new ProcessStartInfo("steam://run/1593030") { UseShellExecute = true });
-                return "已向游戏平台提交启动请求。进入游戏后按 F8 打开面板。"; }); });
-            Controls.Add(new Label { Text = "卸载不回退已保存的货币与地形变化。恢复存档前请退出游戏，并保留当前存档副本。", Location = new Point(26, 535), Size = new Size(720, 25) });
+                return "已向游戏平台提交启动请求。面板快捷键：" + SelectedShortcut().Describe(); }); });
+            Controls.Add(new Label { Text = "卸载不回退已保存的货币与地形变化。恢复存档前请退出游戏，并保留当前存档副本。", Location = new Point(26, 580), Size = new Size(720, 25) });
+            LoadShortcutControls(folder.Text);
+        }
+        private ShortcutChoice SelectedShortcut()
+        {
+            ShortcutOption option = hotkey.SelectedItem as ShortcutOption;
+            return new ShortcutChoice { MainKey = option != null ? option.Key : "F6", Control = hotkeyControl.Checked, Shift = hotkeyShift.Checked, Alt = hotkeyAlt.Checked };
+        }
+        private void LoadShortcutControls(string root)
+        {
+            ShortcutChoice choice;
+            try { choice = ShortcutSettings.Read(InstallEngine.Inside(root, ShortcutSettings.RelativePath)); }
+            catch { choice = new ShortcutChoice(); }
+            foreach (ShortcutOption option in hotkey.Items) if (option.Key == choice.MainKey) { hotkey.SelectedItem = option; break; }
+            hotkeyControl.Checked = choice.Control; hotkeyShift.Checked = choice.Shift; hotkeyAlt.Checked = choice.Alt;
         }
         private Button MakeButton(string title, int x, Action action)
         {
-            Button button = new Button { Text = title, Location = new Point(x, 480), Size = new Size(174, 40) };
+            Button button = new Button { Text = title, Location = new Point(x, 520), Size = new Size(174, 40) };
             button.Click += delegate { action(); };
             Controls.Add(button);
             return button;
@@ -325,6 +374,7 @@ namespace TerraNilTrainer
             string root = folder.Text;
             inspect.Text = "正在检查……";
             inspect.Enabled = install.Enabled = uninstall.Enabled = launch.Enabled = browse.Enabled = folder.Enabled = false;
+            hotkey.Enabled = hotkeyControl.Enabled = hotkeyShift.Enabled = hotkeyAlt.Enabled = saveHotkey.Enabled = false;
             Cursor = Cursors.WaitCursor;
             checkStatus.ForeColor = Color.DarkBlue;
             checkStatus.Text = "第 " + number + " 次检查：正在核对目录和游戏版本……";
@@ -336,7 +386,7 @@ namespace TerraNilTrainer
                 bool installed = File.Exists(InstallEngine.Inside(root, InstallEngine.MarkerDirectory + "/installed.tsv"));
                 e.Result = "游戏版本校验通过。\r\n游戏目录：" + Path.GetFullPath(root) + "\r\n" +
                     (installed ? "已找到本工具安装记录。退出游戏后点击“安装／更新修改器”升级插件；无需先卸载。" : "当前尚未安装。本次检查没有写入游戏目录。\r\n点击“安装／更新修改器”将添加加载框架及插件，并备份本地存档。") +
-                    "\r\n\r\n安装后：\r\n1. 正常启动游戏。\r\n2. F8 打开/隐藏面板。\r\n3. 进入关卡后设置货币；选择倍率或开关。\r\n4. 隐藏面板后建造或回收。\r\n\r\n全部功能初始关闭，每次重启恢复默认。";
+                    "\r\n\r\n安装后：\r\n1. 正常启动游戏。\r\n2. 使用保存的快捷键打开/隐藏面板，默认 F6。\r\n3. 进入关卡后设置货币、建筑或动物功能。\r\n4. 游戏面板中的“自定义快捷键”可录制新组合。\r\n\r\n修改功能默认关闭；自定义快捷键会保留。";
             };
             worker.RunWorkerCompleted += delegate(object sender, RunWorkerCompletedEventArgs e)
             {
@@ -352,6 +402,7 @@ namespace TerraNilTrainer
                     }
                     else
                     {
+                        LoadShortcutControls(root);
                         checkStatus.ForeColor = Color.DarkGreen;
                         checkStatus.Text = "第 " + number + " 次检查通过（北京时间 " + time + "）；详细结果如下。";
                         info.Text = (string)e.Result;
@@ -361,6 +412,7 @@ namespace TerraNilTrainer
                     info.ScrollToCaret();
                     inspect.Text = "重新检查与预览";
                     inspect.Enabled = install.Enabled = uninstall.Enabled = launch.Enabled = browse.Enabled = folder.Enabled = true;
+                    hotkey.Enabled = hotkeyControl.Enabled = hotkeyShift.Enabled = hotkeyAlt.Enabled = saveHotkey.Enabled = true;
                     Cursor = Cursors.Default;
                 }
                 finally { inspecting = false; worker.Dispose(); }

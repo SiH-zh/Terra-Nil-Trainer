@@ -290,7 +290,7 @@ namespace TerraNilTrainer
                 {
                     var view = SelectionHandler.InstanceExists() ? SelectionHandler.Instance.CurrentlySelectedAnimalGroup : null;
                     if (view != null && groups.Contains(view.AnimalGroup)) { selected = view.AnimalGroup; ResetScan("选择已同步，请扫描迁移位置。"); }
-                    else message = "先隐藏 F8 面板，在游戏中选中动物，再打开面板同步。";
+                    else message = "先用面板快捷键隐藏，在游戏中选中动物，再打开面板同步。";
                 }
                 GUILayout.EndHorizontal();
                 if (GUILayout.Button("仅将选中兽群心情拉满")) fillSelectedQueued = true;
@@ -312,7 +312,7 @@ namespace TerraNilTrainer
                 GUI.enabled = true;
             }
             if (marker != null && GUILayout.Button("清除地图推荐标记")) marker = null;
-            GUILayout.Label("推荐使用原始需求评分，持续满心情不会把评分伪造成满分。\n结果是当前地图的领地扩张估算，不能保证迁移后或未来状态。\n按 F8 隐藏面板，使用游戏原有迁移操作移到标记格。扫描不迁移动物、不扣货币。");
+            GUILayout.Label("推荐使用原始需求评分，持续满心情不会把评分伪造成满分。\n结果是当前地图的领地扩张估算，不能保证迁移后或未来状态。\n隐藏面板后使用游戏原有迁移操作移到标记格。扫描不迁移动物、不扣货币。");
             GUI.enabled = true;
         }
         private void SelectAnother(AnimalGroup[] groups, int delta)

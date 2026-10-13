@@ -1,10 +1,11 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Security.Cryptography;
 using BepInEx;
+using BepInEx.Configuration;
 using HarmonyLib;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -19,7 +20,7 @@ using Type = System.Type;
 
 namespace TerraNilTrainer
 {
-    [BepInPlugin(Id, "伊始之地中文修改器", "1.1.0")]
+    [BepInPlugin(Id, "伊始之地中文修改器", "1.2.0")]
     [BepInProcess("Terra Nil.exe")]
     public sealed class TrainerPlugin : BaseUnityPlugin
     {
@@ -38,6 +39,10 @@ namespace TerraNilTrainer
         private Vector2 scroll;
         private int panelTab;
         private AnimalModule animals;
+        private ConfigEntry<Key> panelKey;
+        private ConfigEntry<bool> controlKey, shiftKey, altKey;
+        private bool recordingKey;
+        private int recordStartFrame;
         private Lib.Recyclers.LandRecycler rover;
         private int originalRoverRange;
         private static readonly FieldInfo RoverRange = AccessTools.Field(typeof(Lib.Recyclers.LandRecycler), "recyclingRange");
@@ -49,6 +54,11 @@ namespace TerraNilTrainer
         {
             Instance = this;
             animals = new AnimalModule(this);
+            panelKey = Config.Bind<Key>(ShortcutSettings.Section, ShortcutSettings.MainEntry, Key.F6, "显示或隐藏修改器面板的主按键。");
+            controlKey = Config.Bind<bool>(ShortcutSettings.Section, ShortcutSettings.ControlEntry, false, "快捷键是否需要同时按住控制键。");
+            shiftKey = Config.Bind<bool>(ShortcutSettings.Section, ShortcutSettings.ShiftEntry, false, "快捷键是否需要同时按住上档键。");
+            altKey = Config.Bind<bool>(ShortcutSettings.Section, ShortcutSettings.AltEntry, false, "快捷键是否需要同时按住交替键。");
+            if (!ShortcutSettings.IsSupported(panelKey.Value.ToString())) SetShortcut(new ShortcutChoice());
             try
             {
                 string path = Path.Combine(Paths.ManagedPath, "Assembly-CSharp.dll");
@@ -202,7 +212,7 @@ namespace TerraNilTrainer
         }
         private void Update()
         {
-            if (Keyboard.current != null && Keyboard.current.f8Key.wasPressedThisFrame) Visible = !Visible;
+            UpdateShortcut();
             if (!Ready) return;
             if (currencyQueued)
             {
@@ -215,6 +225,49 @@ namespace TerraNilTrainer
             }
             UpdateRover();
             animals.Update();
+        }
+        public static string ShortcutLabel
+        {
+            get { return Instance != null && Instance.panelKey != null ? Instance.GetShortcut().Describe() : "F6"; }
+        }
+        private ShortcutChoice GetShortcut()
+        {
+            return new ShortcutChoice { MainKey = panelKey.Value.ToString(), Control = controlKey.Value, Shift = shiftKey.Value, Alt = altKey.Value };
+        }
+        private void SetShortcut(ShortcutChoice choice)
+        {
+            bool save = Config.SaveOnConfigSet;
+            Config.SaveOnConfigSet = false;
+            try
+            {
+                panelKey.Value = (Key)Enum.Parse(typeof(Key), choice.MainKey);
+                controlKey.Value = choice.Control; shiftKey.Value = choice.Shift; altKey.Value = choice.Alt;
+                Config.Save();
+            }
+            finally { Config.SaveOnConfigSet = save; }
+            status = "快捷键已保存为 " + choice.Describe() + "，本次及下次启动均生效。";
+        }
+        private void UpdateShortcut()
+        {
+            Keyboard keyboard = Keyboard.current;
+            if (keyboard == null || panelKey == null) return;
+            bool control = keyboard.leftCtrlKey.isPressed || keyboard.rightCtrlKey.isPressed;
+            bool shift = keyboard.leftShiftKey.isPressed || keyboard.rightShiftKey.isPressed;
+            bool alt = keyboard.leftAltKey.isPressed || keyboard.rightAltKey.isPressed;
+            if (recordingKey)
+            {
+                if (Time.frameCount <= recordStartFrame) return;
+                if (keyboard.escapeKey.wasPressedThisFrame) { recordingKey = false; status = "快捷键录制已取消。"; return; }
+                foreach (var key in keyboard.allKeys)
+                    if (key.wasPressedThisFrame && ShortcutSettings.IsSupported(key.keyCode.ToString()))
+                    {
+                        SetShortcut(new ShortcutChoice { MainKey = key.keyCode.ToString(), Control = control, Shift = shift, Alt = alt });
+                        recordingKey = false; Visible = true; return;
+                    }
+                return;
+            }
+            if (keyboard[panelKey.Value].wasPressedThisFrame && control == controlKey.Value && shift == shiftKey.Value && alt == altKey.Value)
+                Visible = !Visible;
         }
         private void UpdateRover()
         {
@@ -238,6 +291,7 @@ namespace TerraNilTrainer
             AnyPosition = IgnoreConditions = false;
             IrrigationFactor = RecyclingFactor = BuildingFactor = 1;
             currencyQueued = false;
+            recordingKey = false;
             RestoreRover();
             if (animals != null) animals.Reset();
             status = "所有开关已关闭、范围恢复为 1 倍；动物心情恢复按环境计算。已改货币和已完成操作不会回退。";
@@ -282,7 +336,15 @@ namespace TerraNilTrainer
         private void DrawPanel(int id)
         {
             scroll = GUILayout.BeginScrollView(scroll);
-            GUILayout.Label("F8 显示/隐藏　｜　关闭面板后操作游戏");
+            GUILayout.Label(ShortcutLabel + " 显示/隐藏　｜　关闭面板后操作游戏");
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button(recordingKey ? "等待按键…按 Esc（退出键）取消" : "自定义快捷键"))
+            {
+                recordingKey = true; recordStartFrame = Time.frameCount;
+                status = "请按主按键，可同时按住控制键、上档键或交替键；退出键取消。";
+            }
+            if (GUILayout.Button("恢复默认 F6", GUILayout.Width(150))) { recordingKey = false; SetShortcut(new ShortcutChoice()); }
+            GUILayout.EndHorizontal();
             GUILayout.Label(status);
             int nextTab = GUILayout.Toolbar(panelTab, new string[] { "货币与建造", "动物心情与迁移" });
             if (nextTab != panelTab) { panelTab = nextTab; scroll = Vector2.zero; }
@@ -292,7 +354,7 @@ namespace TerraNilTrainer
                 GUI.enabled = Ready;
                 if (GUILayout.Button("关闭全部修改并清除推荐", GUILayout.Height(36))) ResetAll();
                 GUI.enabled = true;
-                if (GUILayout.Button("隐藏面板（F8 可重新打开）", GUILayout.Height(36))) Visible = false;
+                if (GUILayout.Button("隐藏面板（" + ShortcutLabel + " 可重新打开）", GUILayout.Height(36))) Visible = false;
                 GUILayout.EndScrollView();
                 GUI.DragWindow(new Rect(0, 0, panel.width, 28));
                 return;
@@ -322,7 +384,7 @@ namespace TerraNilTrainer
             GUILayout.Space(8);
             if (GUILayout.Button("关闭全部修改并恢复原始范围", GUILayout.Height(36))) ResetAll();
             GUI.enabled = true;
-            if (GUILayout.Button("隐藏面板（F8 可重新打开）", GUILayout.Height(36))) Visible = false;
+            if (GUILayout.Button("隐藏面板（" + ShortcutLabel + " 可重新打开）", GUILayout.Height(36))) Visible = false;
             GUILayout.EndScrollView();
             GUI.DragWindow(new Rect(0, 0, panel.width, 28));
         }

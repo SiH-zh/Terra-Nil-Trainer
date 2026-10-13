@@ -20,7 +20,7 @@ using Type = System.Type;
 
 namespace TerraNilTrainer
 {
-    [BepInPlugin(Id, "伊始之地中文修改器", "1.2.1")]
+    [BepInPlugin(Id, "伊始之地中文修改器", "1.2.2")]
     [BepInProcess("Terra Nil.exe")]
     public sealed class TrainerPlugin : BaseUnityPlugin
     {
@@ -44,6 +44,7 @@ namespace TerraNilTrainer
         private bool recordingKey;
         private int recordStartFrame;
         private bool updateReported, guiReported;
+        private bool guiHasCapture;
         private int lastGuiFrame = -100;
         private static readonly Rect ReopenButton = new Rect(12, 12, 132, 36);
         private Lib.Recyclers.LandRecycler rover;
@@ -79,7 +80,7 @@ namespace TerraNilTrainer
                 AddPatch(typeof(MapController), "CanPlaceBuildingAtLocation", "PlacementPostfix", false);
                 AddPatch(typeof(Model.Helpers.ClimateEffectivenessHelper), "EvaluateCurrentClimate", "ClimatePrefix", true);
                 AddPatch(typeof(SelectionHandler), "PlaceCurrentBuilding", "BlockPlacementPrefix", true);
-                AddPatch(typeof(SelectionHandler), "IsOverUI", "BlockUiPrefix", true);
+                AddPatch(typeof(SelectionHandler), "IsOverUI", "BlockUiAtPositionPrefix", true);
                 AddPatch(typeof(SelectionHandler), "IsPointerOverUIObject", "BlockUiPrefix", true);
                 AddPatch(typeof(Model.AnimalGroup), "UpdateNeedsAndHappiness", "MoodUpdatePostfix", false, typeof(AnimalModule));
                 AddPatch(typeof(Data.AnimalGroupData), "CalculateNeedsAndHappiness", "MoodCalculationPostfix", false, typeof(AnimalModule));
@@ -327,6 +328,7 @@ namespace TerraNilTrainer
                 GUI.color = Color.white;
                 GUI.enabled = true;
                 RenderGui();
+                guiHasCapture = GUIUtility.hotControl != 0;
             }
             finally { GUI.skin = oldSkin; GUI.matrix = oldMatrix; GUI.depth = oldDepth; GUI.color = oldColor; GUI.enabled = oldEnabled; }
         }
@@ -337,6 +339,7 @@ namespace TerraNilTrainer
                 if (skin != null) GUI.skin = skin;
                 if (animals != null) animals.DrawMarker();
                 if (GUI.Button(ReopenButton, new GUIContent("打开修改器", "当前快捷键：" + ShortcutLabel))) Visible = true;
+                if (Event.current.type == EventType.Repaint) lastGuiFrame = Time.frameCount;
                 return;
             }
             if (skin == null)
@@ -350,7 +353,7 @@ namespace TerraNilTrainer
                 skin.window.fontSize = 20;
             }
             GUI.skin = skin;
-            float scale = Mathf.Min(1f, Mathf.Min(Screen.width / 560f, Screen.height / 660f));
+            float scale = GuiScale();
             Matrix4x4 old = GUI.matrix;
             GUI.matrix = Matrix4x4.Scale(new Vector3(scale, scale, 1));
             panel.x = Mathf.Clamp(panel.x, 0, Screen.width / scale - panel.width);
@@ -366,7 +369,7 @@ namespace TerraNilTrainer
         private void DrawPanel(int id)
         {
             scroll = GUILayout.BeginScrollView(scroll);
-            GUILayout.Label(ShortcutLabel + " 显示/隐藏　｜　关闭面板后操作游戏");
+            GUILayout.Label(ShortcutLabel + " 显示/隐藏　｜　面板外正常预览和建造");
             GUILayout.BeginHorizontal();
             if (GUILayout.Button(recordingKey ? "等待按键…按 Esc（退出键）取消" : "自定义快捷键"))
             {
@@ -487,15 +490,28 @@ namespace TerraNilTrainer
         }
         private static bool PanelBlocksGame()
         {
-            if (Instance == null) return false;
-            if (Visible) return Time.frameCount - Instance.lastGuiFrame <= 2;
             var mouse = Mouse.current;
             if (mouse == null) return false;
-            Vector2 point = mouse.position.ReadValue();
+            return OverlayContainsScreenPoint(mouse.position.ReadValue());
+        }
+        private static float GuiScale()
+        {
+            return Mathf.Max(0.01f, Mathf.Min(1f, Mathf.Min(Screen.width / 560f, Screen.height / 660f)));
+        }
+        private static bool OverlayContainsScreenPoint(Vector2 point)
+        {
+            if (Instance == null || Screen.width <= 0 || Screen.height <= 0 || Time.frameCount - Instance.lastGuiFrame > 2) return false;
+            if (Instance.guiHasCapture) return true;
             point.y = Screen.height - point.y;
-            return ReopenButton.Contains(point);
+            return Visible ? Instance.panel.Contains(point / GuiScale()) : ReopenButton.Contains(point);
         }
         private static bool BlockPlacementPrefix() { return !PanelBlocksGame(); }
+        private static bool BlockUiAtPositionPrefix(Vector2 screenPosition, ref bool __result)
+        {
+            if (!OverlayContainsScreenPoint(screenPosition)) return true;
+            __result = true;
+            return false;
+        }
         private static bool BlockUiPrefix(ref bool __result)
         {
             if (!PanelBlocksGame()) return true;

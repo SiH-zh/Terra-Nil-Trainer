@@ -67,7 +67,7 @@ namespace TerraNilTrainer
             EnsureClosed(root);
             string marker = Inside(root, MarkerDirectory);
             string manifest = Inside(root, MarkerDirectory + "/installed.tsv");
-            if (File.Exists(manifest)) throw new IOException("已经安装本修改器。无需重复安装；更新时先卸载旧版本。");
+            if (File.Exists(manifest)) return UpgradePlugin(root, payload, manifest, savePath);
             // 不接管已有框架或其他模组的文件。
             foreach (string conflict in new string[] { "winhttp.dll", "doorstop_config.ini", "MelonLoader", "version.dll" })
                 if (File.Exists(Inside(root, conflict)) || Directory.Exists(Inside(root, conflict)))
@@ -94,7 +94,7 @@ namespace TerraNilTrainer
                 if (File.Exists(target)) throw new IOException("目标文件已经存在，拒绝覆盖：" + f[0]);
             }
             Directory.CreateDirectory(marker);
-            string backup = Inside(root, MarkerDirectory + "/存档备份-" + DateTimeOffset.UtcNow.ToOffset(TimeSpan.FromHours(8)).ToString("yyyyMMdd-HHmmss"));
+            string backup = Inside(root, MarkerDirectory + "/存档备份-" + DateTimeOffset.UtcNow.ToOffset(TimeSpan.FromHours(8)).ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N").Substring(0, 8));
             int saveCount = 0;
             if (!String.IsNullOrEmpty(savePath) && Directory.Exists(savePath))
             {
@@ -123,7 +123,7 @@ namespace TerraNilTrainer
                     if (Hash(target) != f[1]) throw new IOException("写入校验失败：" + f[0]);
                 }
                 File.WriteAllText(Inside(root, MarkerDirectory + "/安装记录.txt"),
-                    "伊始之地中文修改器 1.0.0\r\n适配构建：22566272\r\n原始游戏代码未替换。\r\n" +
+                    "伊始之地中文修改器 1.1.0\r\n适配构建：22566272\r\n原始游戏代码未替换。\r\n" +
                     "存档备份来源：" + savePath + "\r\n备份文件数：" + saveCount + "\r\n备份目录：" + backup + "\r\n", new UTF8Encoding(true));
                 return "安装完成。照常启动游戏，按 F8 打开面板。\r\n" + (saveCount > 0 ? "已备份 " + saveCount + " 个存档文件：\r\n" + backup : "未找到可备份的本地存档；首次游玩通常还没有存档。") + "\r\n全部修改默认关闭。";
             }
@@ -143,6 +143,69 @@ namespace TerraNilTrainer
                 CleanEmptyDirectories(root, files);
                 throw;
             }
+        }
+        private static string UpgradePlugin(string root, string payload, string manifest, string savePath)
+        {
+            const string relative = "BepInEx/plugins/TerraNilTrainer/TerraNilTrainer.dll";
+            string target = Inside(root, relative);
+            RejectLinks(root, target);
+            List<string[]> installed = ReadManifest(manifest);
+            List<string[]> package = ReadManifest(Path.Combine(payload, "package.tsv"));
+            foreach (string[] f in package)
+                if (!File.Exists(Inside(payload, f[0])) || Hash(Inside(payload, f[0])) != f[1])
+                    throw new IOException("安装包文件缺失或校验失败：" + f[0]);
+            string[] newRecord = package.FirstOrDefault(f => f[0] == relative);
+            if (newRecord == null) throw new IOException("安装包缺少插件校验记录。");
+            string[] oldRecord = installed.FirstOrDefault(f => f[0] == relative);
+            if (File.Exists(target))
+            {
+                if (oldRecord == null || Hash(target) != oldRecord[1]) throw new IOException("现有插件已被其他程序修改，拒绝覆盖。请先核对插件文件。");
+                if (oldRecord[1] == newRecord[1]) return "当前已是相同插件版本，无需重复安装。\r\n照常启动游戏，按 F8 打开面板。";
+            }
+            foreach (string required in new string[] { "BepInEx/core/BepInEx.dll", "BepInEx/core/0Harmony.dll" })
+            {
+                string[] record = package.FirstOrDefault(f => f[0] == required);
+                string path = Inside(root, required);
+                RejectLinks(root, path);
+                if (record == null || !File.Exists(path) || Hash(path) != record[1])
+                    throw new IOException("共享加载库与本安装包不匹配，已停止升级：" + required);
+            }
+            string backup = Inside(root, MarkerDirectory + "/升级备份-" + DateTime.UtcNow.Ticks);
+            Directory.CreateDirectory(backup);
+            string oldPlugin = Path.Combine(backup, "TerraNilTrainer.dll");
+            string oldManifest = Path.Combine(backup, "installed.tsv");
+            bool existed = File.Exists(target);
+            if (existed) File.Copy(target, oldPlugin, false);
+            File.Copy(manifest, oldManifest, false);
+            if (!String.IsNullOrEmpty(savePath) && Directory.Exists(savePath))
+                foreach (string file in Directory.GetFiles(savePath, "*", SearchOption.AllDirectories))
+                {
+                    if (Path.GetFileName(file).StartsWith("Player", StringComparison.OrdinalIgnoreCase) && Path.GetExtension(file).Equals(".log", StringComparison.OrdinalIgnoreCase)) continue;
+                    RejectLinks(savePath, file);
+                    string rel = file.Substring(savePath.TrimEnd(Path.DirectorySeparatorChar).Length + 1);
+                    string dest = Inside(Path.Combine(backup, "存档"), rel);
+                    Directory.CreateDirectory(Path.GetDirectoryName(dest));
+                    File.Copy(file, dest, false);
+                }
+            string pending = manifest + ".pending-" + DateTime.UtcNow.Ticks;
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(target));
+                File.Copy(Inside(payload, relative), target, true);
+                if (Hash(target) != newRecord[1]) throw new IOException("升级插件写入校验失败。");
+                List<string[]> updated = installed.Where(f => f[0] != relative).ToList();
+                updated.Add(newRecord);
+                File.WriteAllLines(pending, updated.Select(f => String.Join("\t", f)), new UTF8Encoding(true));
+                File.Replace(pending, manifest, null);
+            }
+            catch
+            {
+                if (existed) File.Copy(oldPlugin, target, true);
+                else if (File.Exists(target)) File.Move(target, Path.Combine(backup, "失败的新插件.dll"));
+                File.Copy(oldManifest, manifest, true);
+                throw;
+            }
+            return "插件安装／升级完成。新增动物心情及迁移推荐功能。\r\n启动游戏后按 F8，切换到“动物心情与迁移”。\r\n旧插件、安装记录及找到的当前存档已备份到：\r\n" + backup + "\r\n升级没有替换共享加载框架。";
         }
         private static void CleanEmptyDirectories(string root, List<string[]> files)
         {
@@ -205,7 +268,7 @@ namespace TerraNilTrainer
         private string Payload { get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "载荷"); } }
         public ManagerForm()
         {
-            Text = "伊始之地 · 中文修改器安装与管理（按钮反馈修正版）";
+            Text = "伊始之地 · 中文修改器安装与管理（动物版 1.1.0）";
             Font = new Font("Microsoft YaHei UI", 10);
             StartPosition = FormStartPosition.CenterScreen;
             ClientSize = new Size(760, 570);
@@ -220,14 +283,14 @@ namespace TerraNilTrainer
             browse = new Button { Text = "选择目录", Location = new Point(628, 112), Size = new Size(106, 33) };
             browse.Click += delegate { using (FolderBrowserDialog dialog = new FolderBrowserDialog { Description = "选择包含 Terra Nil.exe 的游戏目录", SelectedPath = folder.Text }) if (dialog.ShowDialog(this) == DialogResult.OK) { folder.Text = dialog.SelectedPath; Inspect(); } };
             Controls.Add(browse);
-            Controls.Add(new Label { Text = "六项功能：设置叶子货币、灌溉范围、回收范围、建筑范围、任意位置建造、忽略建造条件。\r\n安装仅添加插件和加载框架；安装前自动备份本地存档。范围倍率为 1 到 5 倍。", Location = new Point(26, 162), Size = new Size(710, 64) });
+            Controls.Add(new Label { Text = "功能：货币、三类范围、建造限制；新增动物心情拉满、持续保持与迁移位置推荐。\r\n首次安装自动备份存档；已有本工具安装记录时可直接升级插件，保留旧插件备份。", Location = new Point(26, 162), Size = new Size(710, 64) });
             checkStatus = new Label { Text = "尚未检查：点击“检查与预览”开始。", Location = new Point(26, 234), Size = new Size(708, 29), Font = new Font(Font, FontStyle.Bold), ForeColor = Color.DimGray };
             Controls.Add(checkStatus);
             info = new TextBox { ReadOnly = true, Multiline = true, ScrollBars = ScrollBars.Vertical, Location = new Point(26, 269), Size = new Size(708, 192), BackColor = Color.White,
                 Text = "点击下方“检查与预览”，检查游戏目录与版本。\r\n检查只读取文件；完成后会显示结果和下一步操作。" };
             Controls.Add(info);
             inspect = MakeButton("检查与预览", 26, delegate { Inspect(); });
-            install = MakeButton("安装修改器", 204, delegate { Execute(delegate {
+            install = MakeButton("安装／更新修改器", 204, delegate { Execute(delegate {
                 string savePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "AppData", "LocalLow", "Free Lives", "Terra Nil");
                 return InstallEngine.Install(folder.Text, Payload, savePath); }); });
             uninstall = MakeButton("卸载修改器", 382, delegate { Execute(delegate { return InstallEngine.Uninstall(folder.Text); }); });
@@ -272,7 +335,7 @@ namespace TerraNilTrainer
                 InstallEngine.CheckGame(root);
                 bool installed = File.Exists(InstallEngine.Inside(root, InstallEngine.MarkerDirectory + "/installed.tsv"));
                 e.Result = "游戏版本校验通过。\r\n游戏目录：" + Path.GetFullPath(root) + "\r\n" +
-                    (installed ? "已找到本工具安装记录。可直接启动游戏，或退出游戏后卸载。" : "当前尚未安装。本次检查没有写入游戏目录。\r\n点击“安装修改器”将添加加载框架及插件，并备份本地存档。") +
+                    (installed ? "已找到本工具安装记录。退出游戏后点击“安装／更新修改器”升级插件；无需先卸载。" : "当前尚未安装。本次检查没有写入游戏目录。\r\n点击“安装／更新修改器”将添加加载框架及插件，并备份本地存档。") +
                     "\r\n\r\n安装后：\r\n1. 正常启动游戏。\r\n2. F8 打开/隐藏面板。\r\n3. 进入关卡后设置货币；选择倍率或开关。\r\n4. 隐藏面板后建造或回收。\r\n\r\n全部功能初始关闭，每次重启恢复默认。";
             };
             worker.RunWorkerCompleted += delegate(object sender, RunWorkerCompletedEventArgs e)

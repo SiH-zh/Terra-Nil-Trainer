@@ -19,7 +19,7 @@ using Type = System.Type;
 
 namespace TerraNilTrainer
 {
-    [BepInPlugin(Id, "伊始之地中文修改器", "1.0.0")]
+    [BepInPlugin(Id, "伊始之地中文修改器", "1.1.0")]
     [BepInProcess("Terra Nil.exe")]
     public sealed class TrainerPlugin : BaseUnityPlugin
     {
@@ -36,6 +36,8 @@ namespace TerraNilTrainer
         private Font chineseFont;
         private GUISkin skin;
         private Vector2 scroll;
+        private int panelTab;
+        private AnimalModule animals;
         private Lib.Recyclers.LandRecycler rover;
         private int originalRoverRange;
         private static readonly FieldInfo RoverRange = AccessTools.Field(typeof(Lib.Recyclers.LandRecycler), "recyclingRange");
@@ -46,6 +48,7 @@ namespace TerraNilTrainer
         private void Awake()
         {
             Instance = this;
+            animals = new AnimalModule(this);
             try
             {
                 string path = Path.Combine(Paths.ManagedPath, "Assembly-CSharp.dll");
@@ -65,10 +68,12 @@ namespace TerraNilTrainer
                 AddPatch(typeof(SelectionHandler), "PlaceCurrentBuilding", "BlockPlacementPrefix", true);
                 AddPatch(typeof(SelectionHandler), "IsOverUI", "BlockUiPrefix", true);
                 AddPatch(typeof(SelectionHandler), "IsPointerOverUIObject", "BlockUiPrefix", true);
+                AddPatch(typeof(Model.AnimalGroup), "UpdateNeedsAndHappiness", "MoodUpdatePostfix", false, typeof(AnimalModule));
+                AddPatch(typeof(Data.AnimalGroupData), "CalculateNeedsAndHappiness", "MoodCalculationPostfix", false, typeof(AnimalModule));
                 if (RoverRange == null || HeightCheck == null || RestrictedCheck == null)
                     throw new MissingMemberException("未找到完整的回收或建造判定接口。");
                 Ready = true;
-                status = "版本匹配，六项功能就绪；默认全部关闭。";
+                status = "版本匹配，建造及动物功能就绪；默认全部关闭。";
                 Logger.LogInfo(status);
                 if (Environment.GetCommandLineArgs().Contains("-trainer-self-test"))
                 {
@@ -95,11 +100,11 @@ namespace TerraNilTrainer
                 Logger.LogError(ex);
             }
         }
-        private void AddPatch(Type type, string name, string hook, bool prefix)
+        private void AddPatch(Type type, string name, string hook, bool prefix, Type hookType = null)
         {
             MethodInfo method = AccessTools.DeclaredMethod(type, name);
             if (method == null) throw new MissingMethodException(type.FullName, name);
-            HarmonyMethod patch = new HarmonyMethod(typeof(TrainerPlugin), hook);
+            HarmonyMethod patch = new HarmonyMethod(hookType ?? typeof(TrainerPlugin), hook);
             if (prefix) harmony.Patch(method, prefix: patch); else harmony.Patch(method, postfix: patch);
             Logger.LogInfo("已挂接：" + type.FullName + "." + name);
         }
@@ -209,6 +214,7 @@ namespace TerraNilTrainer
                 Logger.LogInfo(status);
             }
             UpdateRover();
+            animals.Update();
         }
         private void UpdateRover()
         {
@@ -233,11 +239,13 @@ namespace TerraNilTrainer
             IrrigationFactor = RecyclingFactor = BuildingFactor = 1;
             currencyQueued = false;
             RestoreRover();
-            status = "所有开关已关闭、范围恢复为 1 倍；已改货币和已完成操作不会回退。";
+            if (animals != null) animals.Reset();
+            status = "所有开关已关闭、范围恢复为 1 倍；动物心情恢复按环境计算。已改货币和已完成操作不会回退。";
         }
         private void OnDestroy()
         {
             Ready = false;
+            if (animals != null) animals.Reset();
             RestoreRover();
             if (harmony != null) harmony.UnpatchSelf();
             if (skin != null) Destroy(skin);
@@ -246,7 +254,12 @@ namespace TerraNilTrainer
         }
         private void OnGUI()
         {
-            if (!Visible) return;
+            if (!Visible)
+            {
+                if (skin != null) GUI.skin = skin;
+                if (animals != null) animals.DrawMarker();
+                return;
+            }
             if (skin == null)
             {
                 skin = Instantiate(GUI.skin);
@@ -271,6 +284,19 @@ namespace TerraNilTrainer
             scroll = GUILayout.BeginScrollView(scroll);
             GUILayout.Label("F8 显示/隐藏　｜　关闭面板后操作游戏");
             GUILayout.Label(status);
+            int nextTab = GUILayout.Toolbar(panelTab, new string[] { "货币与建造", "动物心情与迁移" });
+            if (nextTab != panelTab) { panelTab = nextTab; scroll = Vector2.zero; }
+            if (panelTab == 1)
+            {
+                if (animals != null) animals.DrawPanel();
+                GUI.enabled = Ready;
+                if (GUILayout.Button("关闭全部修改并清除推荐", GUILayout.Height(36))) ResetAll();
+                GUI.enabled = true;
+                if (GUILayout.Button("隐藏面板（F8 可重新打开）", GUILayout.Height(36))) Visible = false;
+                GUILayout.EndScrollView();
+                GUI.DragWindow(new Rect(0, 0, panel.width, 28));
+                return;
+            }
             GameState state = CurrentState();
             GUILayout.Space(6);
             GUILayout.Label("叶子货币　当前：" + (state == null ? "尚未进入关卡" : state.currency.ToString()));

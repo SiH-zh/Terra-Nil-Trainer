@@ -20,7 +20,7 @@ using Type = System.Type;
 
 namespace TerraNilTrainer
 {
-    [BepInPlugin(Id, "伊始之地中文修改器", "1.3.0")]
+    [BepInPlugin(Id, "伊始之地中文修改器", "1.3.1")]
     [BepInProcess("Terra Nil.exe")]
     public sealed class TrainerPlugin : BaseUnityPlugin
     {
@@ -240,6 +240,7 @@ namespace TerraNilTrainer
             undo.Update();
         }
         internal void ReportError(Exception error) { Logger.LogError(error); }
+        internal void ReportStatus(string message) { Logger.LogInfo(message); }
         public static string ShortcutLabel
         {
             get { return Instance != null && Instance.panelKey != null ? Instance.GetShortcut().Describe() : "F6"; }

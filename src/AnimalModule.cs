@@ -226,6 +226,13 @@ namespace TerraNilTrainer
             GameState state = TrainerPlugin.CurrentState();
             return state != null && state.animalState != null ? SortGroups(state.animalState.GetGroups().Where(g => g != null && !g.WantsToDespawnNowEvenInZenMode)) : new AnimalGroup[0];
         }
+        public void SetMoodKeeping(bool enabled)
+        {
+            LockMood = enabled;
+            fillAllQueued = enabled;
+            message = enabled ? "持续满心情已开启：当前及新出现的兽群将保持 100%。" : "持续满心情已关闭，后续按栖息地重新计算。";
+            host.ReportStatus(message);
+        }
         public void Update()
         {
             if (scanState != null && !Object.ReferenceEquals(scanState, TrainerPlugin.CurrentState())) ResetScan("关卡已切换，旧推荐已清除。");
@@ -239,19 +246,25 @@ namespace TerraNilTrainer
             {
                 int count = 0;
                 foreach (AnimalGroup group in Groups()) if (SetFullMood(group, true)) count++;
-                if (fillAllQueued) message = count > 0 ? "已将当前 " + count + " 个兽群心情设置为 100%。" : "当前关卡没有可修改的兽群。";
+                if (fillAllQueued)
+                {
+                    message = count > 0 ? "已将当前 " + count + " 个兽群拉满，持续保持已开启。" : "持续保持已开启，等待关卡出现兽群。";
+                    host.ReportStatus(message);
+                }
                 fillAllQueued = false;
                 nextLockRefresh = Time.realtimeSinceStartup + 0.5f;
             }
             if (fillSelectedQueued)
             {
                 fillSelectedQueued = false;
-                message = Groups().Contains(selected) && SetFullMood(selected, true) ? GroupLabel(selected) + " 心情已设置为 100%。" : "选中兽群已经离开，请重新选择。";
+                message = Groups().Contains(selected) && SetFullMood(selected, true) ? GroupLabel(selected) + (LockMood ? " 心情已设置为 100%，全体持续保持已开启。" : " 心情已设置一次；未开启保持，会按栖息地回落。") : "选中兽群已经离开，请重新选择。";
+                host.ReportStatus(message);
             }
         }
         public void Reset()
         {
             LockMood = fillAllQueued = fillSelectedQueued = false;
+            message = "动物修改已关闭；心情将按栖息地重新计算。";
             ActivityFactor = 1;
             ResetScan("动物修改已关闭，推荐及地图标记已清除。");
             selected = null;
@@ -360,11 +373,12 @@ namespace TerraNilTrainer
             GUILayout.Label("动物心情与迁移　｜　关卡中 " + groups.Length + " 个兽群");
             GUILayout.Label(message);
             GUI.enabled = TrainerPlugin.Ready && groups.Length > 0;
-            if (GUILayout.Button("当前所有兽群心情一键拉满", GUILayout.Height(34))) fillAllQueued = true;
+            if (GUILayout.Button("所有兽群一键拉满并持续保持", GUILayout.Height(34))) SetMoodKeeping(true);
             GUI.enabled = TrainerPlugin.Ready;
             bool keep = GUILayout.Toggle(LockMood, " 持续保持所有兽群满心情（包含新出现的兽群）", GUILayout.Height(32));
-            if (keep != LockMood) { LockMood = keep; if (keep) fillAllQueued = true; message = keep ? "持续满心情已开启。" : "持续满心情已关闭，后续按原规则变化。"; }
-            GUILayout.Label("只改心情，不伪造实际需求；关闭持续保持后会按环境重新计算。");
+            if (keep != LockMood) SetMoodKeeping(keep);
+            GUILayout.Label(LockMood ? "当前状态：持续保持已开启，隐藏菜单也生效。" : "当前状态：持续保持未开启，单次设置会随环境回落。");
+            GUILayout.Label("只改心情，不伪造实际需求；取消上方勾选或关闭全部修改即可停止保持。重启游戏后需重新开启。");
             GUILayout.Space(5);
             GUILayout.Label("动物活动范围：" + ActivityFactor + " 倍（领地容量约 " + (ActivityFactor * ActivityFactor) + " 倍）");
             int nextFactor = GUILayout.Toolbar(ActivityFactor - 1, new string[] { "1", "2", "3", "4", "5" }) + 1;
@@ -406,7 +420,7 @@ namespace TerraNilTrainer
                 if (GUILayout.Button("上一群")) SelectAnother(groups, -1);
                 if (GUILayout.Button("下一群")) SelectAnother(groups, 1);
                 GUILayout.EndHorizontal();
-                if (GUILayout.Button("仅将选中兽群心情拉满")) fillSelectedQueued = true;
+                if (GUILayout.Button("仅选中兽群心情拉满一次")) fillSelectedQueued = true;
             }
             GUILayout.Space(5);
             GUI.enabled = TrainerPlugin.Ready && selected != null && !scanning;

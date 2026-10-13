@@ -52,6 +52,53 @@ namespace TerraNilTrainer
             if (!File.Exists(exe) || !File.Exists(assembly)) throw new IOException("该目录不是完整的《伊始之地》安装目录。");
             if (Hash(assembly) != ExpectedGameHash) throw new IOException("游戏版本不匹配。本修改器仅适配当前构建 22566272；未写入任何游戏文件。");
         }
+        public static string ConfigureLoader(string root)
+        {
+            CheckGame(root);
+            EnsureClosed(root);
+            string path = Inside(root, "BepInEx/config/BepInEx.cfg");
+            RejectLinks(root, path);
+            string original = File.Exists(path) ? File.ReadAllText(path, Encoding.UTF8) : "";
+            var expected = new Dictionary<string, string> {
+                { "Assembly", "UnityEngine.CoreModule.dll" }, { "Type", "MonoBehaviour" }, { "Method", ".cctor" }
+            };
+            var seen = new HashSet<string>();
+            var lines = new List<string>();
+            bool section = false, found = false;
+            Action complete = delegate { foreach (var item in expected) if (seen.Add(item.Key)) lines.Add(item.Key + " = " + item.Value); };
+            foreach (string line in original.Replace("\r\n", "\n").Split('\n'))
+            {
+                string trimmed = line.Trim();
+                if (trimmed.StartsWith("["))
+                {
+                    if (section) complete();
+                    section = trimmed == "[Preloader.Entrypoint]";
+                    found |= section;
+                }
+                int index = trimmed.IndexOf('=');
+                string key = index > 0 ? trimmed.Substring(0, index).Trim() : "";
+                if (section && expected.ContainsKey(key))
+                {
+                    if (seen.Add(key)) lines.Add(key + " = " + expected[key]);
+                }
+                else lines.Add(line);
+            }
+            if (!found) { lines.Add(""); lines.Add("[Preloader.Entrypoint]"); }
+            complete();
+            string updated = String.Join("\r\n", lines.ToArray()).TrimEnd('\r', '\n') + "\r\n";
+            if (original.Replace("\r\n", "\n").TrimEnd('\r', '\n') == updated.Replace("\r\n", "\n").TrimEnd('\r', '\n'))
+                return "加载入口已正确，无需重复修改。";
+            string backup = Inside(root, MarkerDirectory + "/加载配置备份-" + DateTimeOffset.UtcNow.ToOffset(TimeSpan.FromHours(8)).ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            RejectLinks(root, backup);
+            Directory.CreateDirectory(backup);
+            if (File.Exists(path)) File.Copy(path, Path.Combine(backup, "原加载配置.cfg"), false);
+            else File.WriteAllText(Path.Combine(backup, "原配置不存在.txt"), "修复前没有加载配置文件。", new UTF8Encoding(true));
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            string pending = path + ".pending-" + Guid.NewGuid().ToString("N");
+            File.WriteAllText(pending, updated, new UTF8Encoding(true));
+            if (File.Exists(path)) File.Replace(pending, path, null); else File.Move(pending, path);
+            return "已修复面板加载入口，重新启动游戏后生效。\r\n原加载配置备份：" + backup;
+        }
         public static List<string[]> ReadManifest(string path)
         {
             return File.ReadAllLines(path, Encoding.UTF8).Where(x => !String.IsNullOrWhiteSpace(x))
@@ -123,9 +170,10 @@ namespace TerraNilTrainer
                     if (Hash(target) != f[1]) throw new IOException("写入校验失败：" + f[0]);
                 }
                 File.WriteAllText(Inside(root, MarkerDirectory + "/安装记录.txt"),
-                    "伊始之地中文修改器 1.2.0\r\n适配构建：22566272\r\n原始游戏代码未替换。\r\n" +
+                    "伊始之地中文修改器 1.2.1\r\n适配构建：22566272\r\n原始游戏代码未替换。\r\n" +
                     "存档备份来源：" + savePath + "\r\n备份文件数：" + saveCount + "\r\n备份目录：" + backup + "\r\n", new UTF8Encoding(true));
-                return "安装完成。照常启动游戏，按 F6 打开面板。\r\n" + (saveCount > 0 ? "已备份 " + saveCount + " 个存档文件：\r\n" + backup : "未找到可备份的本地存档；首次游玩通常还没有存档。") + "\r\n全部修改默认关闭。";
+                string loaderResult = ConfigureLoader(root);
+                return "安装完成。照常启动游戏，面板启动时显示。\r\n" + loaderResult + "\r\n" + (saveCount > 0 ? "已备份 " + saveCount + " 个存档文件：\r\n" + backup : "未找到可备份的本地存档；首次游玩通常还没有存档。") + "\r\n全部修改默认关闭。";
             }
             catch
             {
@@ -160,7 +208,7 @@ namespace TerraNilTrainer
             if (File.Exists(target))
             {
                 if (oldRecord == null || Hash(target) != oldRecord[1]) throw new IOException("现有插件已被其他程序修改，拒绝覆盖。请先核对插件文件。");
-                if (oldRecord[1] == newRecord[1]) return "当前已是相同插件版本，无需重复安装。\r\n照常启动游戏，按 F6 打开面板。";
+                if (oldRecord[1] == newRecord[1]) return "当前已是相同插件版本。\r\n" + ConfigureLoader(root);
             }
             foreach (string required in new string[] { "BepInEx/core/BepInEx.dll", "BepInEx/core/0Harmony.dll" })
             {
@@ -197,6 +245,7 @@ namespace TerraNilTrainer
                 updated.Add(newRecord);
                 File.WriteAllLines(pending, updated.Select(f => String.Join("\t", f)), new UTF8Encoding(true));
                 File.Replace(pending, manifest, null);
+                ConfigureLoader(root);
             }
             catch
             {
@@ -290,7 +339,7 @@ namespace TerraNilTrainer
         private string Payload { get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "载荷"); } }
         public ManagerForm()
         {
-            Text = "伊始之地 · 中文修改器安装与管理（自定义快捷键版 1.2.0）";
+            Text = "伊始之地 · 中文修改器安装与管理（自定义快捷键版 1.2.1）";
             Font = new Font("Microsoft YaHei UI", 10);
             StartPosition = FormStartPosition.CenterScreen;
             ClientSize = new Size(760, 625);

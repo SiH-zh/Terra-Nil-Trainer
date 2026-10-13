@@ -20,7 +20,7 @@ using Type = System.Type;
 
 namespace TerraNilTrainer
 {
-    [BepInPlugin(Id, "伊始之地中文修改器", "1.2.0")]
+    [BepInPlugin(Id, "伊始之地中文修改器", "1.2.1")]
     [BepInProcess("Terra Nil.exe")]
     public sealed class TrainerPlugin : BaseUnityPlugin
     {
@@ -43,6 +43,9 @@ namespace TerraNilTrainer
         private ConfigEntry<bool> controlKey, shiftKey, altKey;
         private bool recordingKey;
         private int recordStartFrame;
+        private bool updateReported, guiReported;
+        private int lastGuiFrame = -100;
+        private static readonly Rect ReopenButton = new Rect(12, 12, 132, 36);
         private Lib.Recyclers.LandRecycler rover;
         private int originalRoverRange;
         private static readonly FieldInfo RoverRange = AccessTools.Field(typeof(Lib.Recyclers.LandRecycler), "recyclingRange");
@@ -212,6 +215,7 @@ namespace TerraNilTrainer
         }
         private void Update()
         {
+            if (!updateReported) { updateReported = true; Logger.LogInfo("面板按键更新已运行；当前快捷键：" + ShortcutLabel); }
             UpdateShortcut();
             if (!Ready) return;
             if (currencyQueued)
@@ -267,7 +271,10 @@ namespace TerraNilTrainer
                 return;
             }
             if (keyboard[panelKey.Value].wasPressedThisFrame && control == controlKey.Value && shift == shiftKey.Value && alt == altKey.Value)
+            {
                 Visible = !Visible;
+                Logger.LogInfo("快捷键已触发，面板" + (Visible ? "显示。" : "隐藏。"));
+            }
         }
         private void UpdateRover()
         {
@@ -308,10 +315,28 @@ namespace TerraNilTrainer
         }
         private void OnGUI()
         {
+            GUISkin oldSkin = GUI.skin;
+            Matrix4x4 oldMatrix = GUI.matrix;
+            int oldDepth = GUI.depth;
+            Color oldColor = GUI.color;
+            bool oldEnabled = GUI.enabled;
+            try
+            {
+                GUI.matrix = Matrix4x4.identity;
+                GUI.depth = -1000;
+                GUI.color = Color.white;
+                GUI.enabled = true;
+                RenderGui();
+            }
+            finally { GUI.skin = oldSkin; GUI.matrix = oldMatrix; GUI.depth = oldDepth; GUI.color = oldColor; GUI.enabled = oldEnabled; }
+        }
+        private void RenderGui()
+        {
             if (!Visible)
             {
                 if (skin != null) GUI.skin = skin;
                 if (animals != null) animals.DrawMarker();
+                if (GUI.Button(ReopenButton, new GUIContent("打开修改器", "当前快捷键：" + ShortcutLabel))) Visible = true;
                 return;
             }
             if (skin == null)
@@ -332,6 +357,11 @@ namespace TerraNilTrainer
             panel.y = Mathf.Clamp(panel.y, 0, Screen.height / scale - panel.height);
             panel = GUILayout.Window(1593030, panel, DrawPanel, "伊始之地 · 中文修改器");
             GUI.matrix = old;
+            if (Event.current.type == EventType.Repaint)
+            {
+                lastGuiFrame = Time.frameCount;
+                if (!guiReported) { guiReported = true; Logger.LogInfo("面板已绘制；分辨率：" + Screen.width + "×" + Screen.height); }
+            }
         }
         private void DrawPanel(int id)
         {
@@ -455,10 +485,20 @@ namespace TerraNilTrainer
                 if (Instance != null) Instance.status = "该建筑需要专属流程，无法放宽当前放置条件：" + ex.GetBaseException().Message;
             }
         }
-        private static bool BlockPlacementPrefix() { return !Visible; }
+        private static bool PanelBlocksGame()
+        {
+            if (Instance == null) return false;
+            if (Visible) return Time.frameCount - Instance.lastGuiFrame <= 2;
+            var mouse = Mouse.current;
+            if (mouse == null) return false;
+            Vector2 point = mouse.position.ReadValue();
+            point.y = Screen.height - point.y;
+            return ReopenButton.Contains(point);
+        }
+        private static bool BlockPlacementPrefix() { return !PanelBlocksGame(); }
         private static bool BlockUiPrefix(ref bool __result)
         {
-            if (!Visible) return true;
+            if (!PanelBlocksGame()) return true;
             __result = true;
             return false;
         }

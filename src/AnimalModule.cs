@@ -36,6 +36,12 @@ namespace TerraNilTrainer
     {
         internal static bool LockMood;
         internal static int ActivityFactor = 1;
+        private static readonly Dictionary<AnimalType, int> speciesActivity = new Dictionary<AnimalType, int>();
+        private AnimalType rangeSpecies = AnimalType.Deer;
+        private int rangeSpeciesInput = 1;
+        private string rangeSpeciesFilter = "";
+        private Vector2 rangeSpeciesScroll;
+        private bool showSpeciesRanges;
         [ThreadStatic] private static int rawScoreDepth;
         [ThreadStatic] private static AnimalGroup updatingMoodGroup;
         private static readonly HashSet<AnimalGroup> individuallyKept = new HashSet<AnimalGroup>();
@@ -55,6 +61,7 @@ namespace TerraNilTrainer
         private AnimalPrediction baseline, marker;
         private readonly List<AnimalPrediction> best = new List<AnimalPrediction>();
         private readonly List<AnimalPrediction> bestPoints = new List<AnimalPrediction>();
+        private readonly List<Rect> recommendationLabels = new List<Rect>();
         private float highestScore = -1f;
         private long completedSignature;
         private bool stale, showMarkers = true, showGroupList = true;
@@ -62,14 +69,40 @@ namespace TerraNilTrainer
         private string groupFilter = "";
         private Vector2 groupScroll;
         private static readonly FieldInfo GameplayCamera = AccessTools.Field(typeof(CameraController), "_camera");
+        private bool highlightAll, highlightNames = true;
+        private float nextHighlightRefresh;
+        private GameState highlightState;
+        private AnimalGroup[] highlightedGroups = new AnimalGroup[0];
+        internal int LastHighlightedIndividuals;
+        public bool HighlightsEnabled { get { return highlightAll; } }
+        public void SetAllHighlights(bool enabled)
+        {
+            highlightAll = enabled; nextHighlightRefresh = 0f;
+            highlightedGroups = new AnimalGroup[0]; highlightState = null;
+            LastHighlightedIndividuals = 0;
+            message = enabled ? "全图动物高亮已开启：亮色框跟随个体，种群标签显示物种与名字。" : "全图动物高亮已关闭。";
+            host.ReportStatus(message);
+        }
+        public static AnimalGroup[] GetHighlightGroups(GameState state)
+        { return state != null && state.animalState != null ? SortGroups(state.animalState.GetGroups().Where(g => g != null && !g.WantsToDespawnNowEvenInZenMode)) : new AnimalGroup[0]; }
 
         public AnimalModule(TrainerPlugin plugin) { host = plugin; }
         internal static void TerritoryLimitPostfix(AnimalGroup __instance, ref int __result)
         {
-            if (!TrainerPlugin.Ready || ActivityFactor == 1 || __instance.WantsToDespawnNowEvenInZenMode) return;
+            int factor = GetSpeciesActivityFactor(__instance.type);
+            if (!TrainerPlugin.Ready || factor == 1 || __instance.WantsToDespawnNowEvenInZenMode) return;
             int mapSize = AnimalGroup.MapState.size;
-            __result = ScaleActivityLimit(__result, ActivityFactor, mapSize);
+            __result = ScaleActivityLimit(__result, factor, mapSize);
         }
+        public static int GetSpeciesActivityFactor(AnimalType species)
+        { int factor; return speciesActivity.TryGetValue(species, out factor) ? factor : ActivityFactor; }
+        public static void SetSpeciesActivityFactor(AnimalType species, int factor)
+        {
+            if (species == AnimalType.Undiscovered || species == AnimalType.DebugDeer || !Enum.IsDefined(typeof(AnimalType), species))
+                throw new ArgumentException("请选择实际动物物种。");
+            speciesActivity[species] = Math.Max(1, Math.Min(5, factor));
+        }
+        public static void ClearSpeciesActivityFactor(AnimalType species) { speciesActivity.Remove(species); }
         public static int ScaleActivityLimit(int original, int factor, int mapSize)
         {
             if (original <= 0 || factor <= 1 || mapSize <= 0) return original;
@@ -203,6 +236,8 @@ namespace TerraNilTrainer
             {
                 long value = 1469598103934665603L;
                 value = (value ^ ActivityFactor) * 1099511628211L;
+                foreach (var entry in speciesActivity.OrderBy(p => (int)p.Key))
+                    value = (value ^ (int)entry.Key ^ ((long)entry.Value << 32)) * 1099511628211L;
                 value = (value ^ TrainerPlugin.BuildingFactor ^ (TrainerPlugin.IrrigationFactor << 4) ^ (TrainerPlugin.RecyclingFactor << 8)) * 1099511628211L;
                 foreach (Tile tile in state.mapState.map)
                 {
@@ -263,6 +298,8 @@ namespace TerraNilTrainer
         public void Update()
         {
             GameState currentState = TrainerPlugin.CurrentState();
+            if (highlightAll && (!Object.ReferenceEquals(highlightState, currentState) || Time.realtimeSinceStartup >= nextHighlightRefresh))
+            { highlightState = currentState; highlightedGroups = GetHighlightGroups(currentState); nextHighlightRefresh = Time.realtimeSinceStartup + 0.5f; }
             if (!Object.ReferenceEquals(individualMoodState, currentState))
             {
                 if (individuallyKept.Count > 0) message = "关卡状态已切换：单独兽群保持已清空，请按名字重新选择。";
@@ -302,8 +339,10 @@ namespace TerraNilTrainer
             individuallyKept.Clear(); individualMoodState = null;
             message = "动物修改已关闭；心情将按栖息地重新计算。";
             ActivityFactor = 1;
+            speciesActivity.Clear();
             ResetScan("动物修改已关闭，推荐及地图标记已清除。");
             selected = null;
+            highlightAll = false; highlightedGroups = new AnimalGroup[0]; highlightState = null;
         }
         private void ResetScan(string text)
         {
@@ -408,6 +447,8 @@ namespace TerraNilTrainer
             if (selected != null && !groups.Contains(selected)) { selected = null; ResetScan("原种群已经离开，请按名字重新选择。"); }
             GUILayout.Label("动物心情与迁移　｜　关卡中 " + groups.Length + " 个兽群");
             GUILayout.Label(message);
+            if (GUILayout.Button(highlightAll ? "关闭地图上全部动物高亮" : "一键高亮地图上所有动物", GUILayout.Height(34))) SetAllHighlights(!highlightAll);
+            if (highlightAll) highlightNames = GUILayout.Toggle(highlightNames, " 高亮时显示物种与种群名字（隐藏菜单也显示）");
             GUI.enabled = TrainerPlugin.Ready && groups.Length > 0;
             if (GUILayout.Button("所有兽群一键拉满并持续保持", GUILayout.Height(34))) SetMoodKeeping(true);
             GUI.enabled = TrainerPlugin.Ready;
@@ -418,7 +459,7 @@ namespace TerraNilTrainer
             if (kept.Length > 0) GUILayout.Label("单独保持名单：" + String.Join("、", kept.Select(GroupLabel).ToArray()));
             GUILayout.Label("只改心情，不伪造需求。关闭全部修改可取消所有保持；重启、读档或撤销切换关卡状态后，单独保持需重选。");
             GUILayout.Space(5);
-            GUILayout.Label("动物活动范围：" + ActivityFactor + " 倍（领地容量约 " + (ActivityFactor * ActivityFactor) + " 倍）");
+            GUILayout.Label("动物通用活动范围：" + ActivityFactor + " 倍（没有单独物种设置时使用）");
             int nextFactor = GUILayout.Toolbar(ActivityFactor - 1, new string[] { "1", "2", "3", "4", "5" }) + 1;
             if (nextFactor != ActivityFactor)
             {
@@ -427,6 +468,7 @@ namespace TerraNilTrainer
                 ResetScan("活动范围已改变，请按新范围重新扫描。");
             }
             GUILayout.Label("所有种群按原栖息地规则逐步扩大领地；不是固定圆形范围。1 倍恢复原上限，已经扩张的领地不会立即回退。");
+            DrawSpeciesRanges(groups);
             GUILayout.Space(5);
             GUI.enabled = TrainerPlugin.Ready && groups.Length > 0;
             GUILayout.BeginHorizontal();
@@ -454,6 +496,7 @@ namespace TerraNilTrainer
                 GUILayout.Label("推荐对象：" + GroupLabel(selected) +
                     "　心情 " + (100 * selected.GetCurrentHappiness()).ToString("0") + "%\n领地中心（" + center.x.ToString("0") + ", " + center.y.ToString("0") + "），" + selected.IndividualCount + " 只");
                 GUILayout.Label("当前活动领地 " + selected.TerritoryCount + " 格，上限 " + selected.GetTerritoryMaxTilesWithModifiers() + " 格。");
+                GUILayout.Label("本物种实际范围：" + GetSpeciesActivityFactor(selected.type) + " 倍；物种单独倍率覆盖通用倍率，不叠乘。");
                 GUILayout.BeginHorizontal();
                 if (GUILayout.Button("上一群")) SelectAnother(groups, -1);
                 if (GUILayout.Button("下一群")) SelectAnother(groups, 1);
@@ -493,6 +536,99 @@ namespace TerraNilTrainer
             selected = groups[(index + delta + groups.Length) % groups.Length];
             ResetScan("已切换兽群，请重新扫描。");
         }
+        public void DrawAllHighlights()
+        {
+            if (!highlightAll || !TrainerPlugin.Ready || Event.current.type != EventType.Repaint || !Object.ReferenceEquals(highlightState, TrainerPlugin.CurrentState())) return;
+            Camera camera = CameraController.InstanceExists() && GameplayCamera != null ? GameplayCamera.GetValue(CameraController.Instance) as Camera : null;
+            if (camera == null) camera = Camera.main;
+            if (camera == null) return;
+            Color original = GUI.color;
+            LastHighlightedIndividuals = 0;
+            List<Rect> occupied = new List<Rect>(recommendationLabels);
+            Rect panel = TrainerPlugin.VisiblePanelBounds;
+            foreach (AnimalGroup group in highlightedGroups)
+            {
+                if (group.WantsToDespawnNowEvenInZenMode) continue;
+                Color color = Color.HSVToRGB(((int)group.type * 0.618034f) % 1f, 0.45f, 1f);
+                var view = AnimalController.InstanceExists() ? AnimalController.Instance.GetViewAnimalGroup(group) : null;
+                Vector3 center = Vector3.zero; int count = 0;
+                if (view != null && view.Animals != null)
+                    foreach (var animal in view.Animals)
+                    {
+                        if (animal == null) continue;
+                        Vector3 world = animal.transform.position + Vector3.up * 0.35f;
+                        center += world; count++;
+                        LastHighlightedIndividuals++;
+                        DrawAnimalFrame(camera, world, color);
+                    }
+                if (count > 0) center /= count;
+                else
+                {
+                    Vector2 home = group.TerritoryCenter;
+                    var state = highlightState;
+                    var tile = state.mapState == null ? null : state.mapState.GetTile(Mathf.RoundToInt(home.x), Mathf.RoundToInt(home.y));
+                    if (tile == null) continue;
+                    var surface = MapController.InstanceExists() ? MapController.Instance.GetGameplayTile(tile) : null;
+                    center = surface != null ? surface.GetSurfacePosition() : new Vector3(tile.x, tile.height, tile.z);
+                    DrawAnimalFrame(camera, center, color);
+                }
+                if (!highlightNames) continue;
+                Vector3 screen = camera.WorldToScreenPoint(center);
+                if (screen.z <= 0 || screen.x < 0 || screen.x > Screen.width || screen.y < 0 || screen.y > Screen.height) continue;
+                float width = Math.Min(330f, Screen.width - 12f);
+                Rect label = new Rect(Mathf.Clamp(screen.x + 12, 6, Screen.width - width - 6), Mathf.Clamp(Screen.height - screen.y - 34, 6, Screen.height - 56), width, 52);
+                if (panel.width > 0 && label.Overlaps(panel)) label.x = Mathf.Clamp(panel.xMax + 6, 6, Screen.width - width - 6);
+                for (int i = 0; i < 12 && occupied.Any(r => r.Overlaps(label)); i++) label.y = Mathf.Clamp(label.y + 54, 6, Screen.height - 56);
+                GUI.color = color;
+                GUI.Box(label, GroupLabel(group) + "\n" + group.IndividualCount + " 只 · 心情 " + (group.GetCurrentHappiness() * 100).ToString("0") + "%" + (count == 0 ? " · 种群中心" : ""));
+                occupied.Add(label);
+            }
+            GUI.color = original;
+        }
+        private static void DrawAnimalFrame(Camera camera, Vector3 world, Color color)
+        {
+            Vector3 screen = camera.WorldToScreenPoint(world);
+            if (screen.z <= 0 || screen.x < 0 || screen.x > Screen.width || screen.y < 0 || screen.y > Screen.height) return;
+            float x = screen.x, y = Screen.height - screen.y;
+            GUI.color = color;
+            GUI.DrawTexture(new Rect(x - 10, y - 10, 20, 2), Texture2D.whiteTexture);
+            GUI.DrawTexture(new Rect(x - 10, y + 8, 20, 2), Texture2D.whiteTexture);
+            GUI.DrawTexture(new Rect(x - 10, y - 10, 2, 20), Texture2D.whiteTexture);
+            GUI.DrawTexture(new Rect(x + 8, y - 10, 2, 20), Texture2D.whiteTexture);
+            GUI.DrawTexture(new Rect(x - 2, y - 2, 4, 4), Texture2D.whiteTexture);
+        }
+        private void DrawSpeciesRanges(AnimalGroup[] groups)
+        {
+            showSpeciesRanges = GUILayout.Toggle(showSpeciesRanges, " 按物种分别设置活动范围");
+            if (!showSpeciesRanges) return;
+            GUILayout.Label("可只扩大鹿、熊等某个物种，作用于该物种当前及之后出现的全部种群。");
+            rangeSpeciesFilter = GUILayout.TextField(rangeSpeciesFilter);
+            rangeSpeciesScroll = GUILayout.BeginScrollView(rangeSpeciesScroll, GUILayout.Height(110));
+            foreach (AnimalType species in Enum.GetValues(typeof(AnimalType)).Cast<AnimalType>().Where(s => s != AnimalType.DebugDeer && s != AnimalType.Undiscovered).OrderBy(SpeciesName, StringComparer.Ordinal))
+            {
+                string name = SpeciesName(species);
+                if (rangeSpeciesFilter.Length > 0 && name.IndexOf(rangeSpeciesFilter, StringComparison.CurrentCultureIgnoreCase) < 0) continue;
+                if (GUILayout.Button((species == rangeSpecies ? "✓ " : "") + name + "　" + GetSpeciesActivityFactor(species) + " 倍" + (speciesActivity.ContainsKey(species) ? " [单独设置]" : " [继承通用]")))
+                { rangeSpecies = species; rangeSpeciesInput = GetSpeciesActivityFactor(species); }
+            }
+            GUILayout.EndScrollView();
+            if (selected != null && GUILayout.Button("采用选中兽群的物种：" + SpeciesName(selected.type)))
+            { rangeSpecies = selected.type; rangeSpeciesInput = GetSpeciesActivityFactor(rangeSpecies); }
+            GUILayout.Label("设置对象：" + SpeciesName(rangeSpecies) + "；当前 " + GetSpeciesActivityFactor(rangeSpecies) + " 倍");
+            rangeSpeciesInput = GUILayout.Toolbar(rangeSpeciesInput - 1, new[] { "1", "2", "3", "4", "5" }) + 1;
+            GUILayout.BeginHorizontal();
+            bool changed = false;
+            if (GUILayout.Button("应用到此物种")) { SetSpeciesActivityFactor(rangeSpecies, rangeSpeciesInput); changed = true; }
+            if (GUILayout.Button("此物种恢复继承通用")) { ClearSpeciesActivityFactor(rangeSpecies); rangeSpeciesInput = GetSpeciesActivityFactor(rangeSpecies); changed = true; }
+            GUILayout.EndHorizontal();
+            if (changed)
+            {
+                foreach (var group in groups.Where(g => g.type == rangeSpecies)) group.MarkUiDirty(true);
+                ResetScan("物种活动范围已改变，请重新扫描推荐。");
+                host.ReportStatus(SpeciesName(rangeSpecies) + " 活动范围已设为 " + GetSpeciesActivityFactor(rangeSpecies) + " 倍。");
+            }
+            if (speciesActivity.Count > 0) GUILayout.Label("单独物种设置：" + String.Join("、", speciesActivity.OrderBy(p => SpeciesName(p.Key)).Select(p => SpeciesName(p.Key) + " " + p.Value + " 倍").ToArray()));
+        }
         private void Locate(AnimalPrediction p)
         {
             if (scanState == null || !Object.ReferenceEquals(scanState, TrainerPlugin.CurrentState()) || scanGroup == null ||
@@ -514,6 +650,7 @@ namespace TerraNilTrainer
         }
         public void DrawMarker()
         {
+            if (Event.current.type == EventType.Repaint) recommendationLabels.Clear();
             if (!showMarkers || bestPoints.Count == 0 || scanState == null || scanning || !Object.ReferenceEquals(scanState, TrainerPlugin.CurrentState())) return;
             Camera camera = CameraController.InstanceExists() && GameplayCamera != null ? GameplayCamera.GetValue(CameraController.Instance) as Camera : null;
             if (camera == null) camera = Camera.main;
@@ -545,6 +682,7 @@ namespace TerraNilTrainer
                     else if (label.Overlaps(panelBounds) && panelBounds.xMin >= 288) label.x = panelBounds.xMin - 288;
                     for (int shift = 0; shift < 5 && boxes.Any(b => b.Overlaps(label)); shift++) label.y = Mathf.Clamp(label.y + 82, 0, Math.Max(0, Screen.height - 80));
                     boxes.Add(label);
+                    recommendationLabels.Add(label);
                     GUI.Box(label, (stale ? "旧预测 · " : "候选 ") + (i + 1) + "　" + GroupLabel(scanGroup) + "\n起点（" + p.Start.x + ", " + p.Start.z + "）\n预估心情 " + (p.Score * 100).ToString("0.0") + "%");
                 }
             }

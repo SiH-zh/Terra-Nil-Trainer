@@ -170,10 +170,10 @@ namespace TerraNilTrainer
                     if (Hash(target) != f[1]) throw new IOException("写入校验失败：" + f[0]);
                 }
                 File.WriteAllText(Inside(root, MarkerDirectory + "/安装记录.txt"),
-                    "伊始之地中文修改器 1.3.2\r\n适配构建：22566272\r\n原始游戏代码未替换。\r\n" +
+                    "伊始之地中文修改器 1.4.0\r\n适配构建：22566272\r\n原始游戏代码未替换。\r\n" +
                     "存档备份来源：" + savePath + "\r\n备份文件数：" + saveCount + "\r\n备份目录：" + backup + "\r\n", new UTF8Encoding(true));
                 string loaderResult = ConfigureLoader(root);
-                return "安装完成。照常启动游戏，面板启动时显示。\r\n" + loaderResult + "\r\n" + (saveCount > 0 ? "已备份 " + saveCount + " 个存档文件：\r\n" + backup : "未找到可备份的本地存档；首次游玩通常还没有存档。") + "\r\n全部修改默认关闭。";
+                return "安装完成。照常启动游戏，面板启动时显示。\r\n" + loaderResult + "\r\n" + (saveCount > 0 ? "已备份 " + saveCount + " 个存档文件：\r\n" + backup : "未找到可备份的本地存档；首次游玩通常还没有存档。") + "\r\n无限撤销默认开启，其余修改默认关闭。";
             }
             catch
             {
@@ -254,7 +254,7 @@ namespace TerraNilTrainer
                 File.Copy(oldManifest, manifest, true);
                 throw;
             }
-            return "插件安装／升级完成。已加入拖动边框调整面板大小、指定具名兽群满心情保持；原有地图推荐、范围与无限撤销功能保留。\r\n面板默认使用 F6，可在工具或游戏内设置其他按键。\r\n旧插件、安装记录及找到的当前存档已备份到：\r\n" + backup + "\r\n升级没有替换共享加载框架。";
+            return "插件安装／升级完成。已加入指定物种活动范围、地形涂抹与全图动物高亮；无限撤销默认开启。\r\n面板默认使用 F6，可在工具或游戏内设置其他按键。\r\n旧插件、安装记录及找到的当前存档已备份到：\r\n" + backup + "\r\n升级没有替换共享加载框架。";
         }
         private static void CleanEmptyDirectories(string root, List<string[]> files)
         {
@@ -339,7 +339,7 @@ namespace TerraNilTrainer
         private string Payload { get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "载荷"); } }
         public ManagerForm()
         {
-            Text = "伊始之地 · 中文修改器安装与管理（可缩放面板与指定动物版 1.3.2）";
+            Text = "伊始之地 · 中文修改器安装与管理（物种范围与地形涂抹版 1.4.0）";
             Font = new Font("Microsoft YaHei UI", 10);
             StartPosition = FormStartPosition.CenterScreen;
             ClientSize = new Size(760, 625);
@@ -366,7 +366,7 @@ namespace TerraNilTrainer
             saveHotkey.Click += delegate { Execute(delegate { return InstallEngine.ConfigureShortcut(folder.Text, Payload, SelectedShortcut()); }); };
             Controls.Add(saveHotkey);
             Controls.Add(new Label { Text = "也可在游戏面板中点击“自定义快捷键”录制。此处保存后，下次启动游戏生效。", Location = new Point(26, 198), Size = new Size(710, 30) });
-            Controls.Add(new Label { Text = "功能：货币与建造；按种群名字推荐、地图全部最佳点、动物活动范围、无限撤销开关。\r\n首次安装自动备份存档；已有本工具安装记录时可直接升级插件，保留旧插件备份。", Location = new Point(26, 233), Size = new Size(710, 57) });
+            Controls.Add(new Label { Text = "功能：指定物种范围、地形涂抹、全图动物高亮；无限撤销默认开启。\r\n保留货币与建造、具名动物心情和迁移推荐；安装与升级自动备份。", Location = new Point(26, 233), Size = new Size(710, 57) });
             checkStatus = new Label { Text = "尚未检查：点击“检查与预览”开始。", Location = new Point(26, 297), Size = new Size(708, 29), Font = new Font(Font, FontStyle.Bold), ForeColor = Color.DimGray };
             Controls.Add(checkStatus);
             info = new TextBox { ReadOnly = true, Multiline = true, ScrollBars = ScrollBars.Vertical, Location = new Point(26, 335), Size = new Size(708, 169), BackColor = Color.White,
@@ -435,7 +435,7 @@ namespace TerraNilTrainer
                 bool installed = File.Exists(InstallEngine.Inside(root, InstallEngine.MarkerDirectory + "/installed.tsv"));
                 e.Result = "游戏版本校验通过。\r\n游戏目录：" + Path.GetFullPath(root) + "\r\n" +
                     (installed ? "已找到本工具安装记录。退出游戏后点击“安装／更新修改器”升级插件；无需先卸载。" : "当前尚未安装。本次检查没有写入游戏目录。\r\n点击“安装／更新修改器”将添加加载框架及插件，并备份本地存档。") +
-                    "\r\n\r\n安装后：\r\n1. 正常启动游戏。\r\n2. 使用保存的快捷键打开/隐藏面板，默认 F6。\r\n3. 进入关卡后设置货币、建筑或动物功能。\r\n4. 游戏面板中的“自定义快捷键”可录制新组合。\r\n\r\n修改功能默认关闭；自定义快捷键会保留。";
+                    "\r\n\r\n安装后：\r\n1. 正常启动游戏，无限撤销默认开启。\r\n2. 使用保存的快捷键打开/隐藏面板，默认 F6。\r\n3. 进入关卡后设置货币、动物或上帝之手功能。\r\n4. 游戏面板中的“自定义快捷键”可录制新组合。\r\n\r\n其余修改默认关闭；自定义快捷键会保留。";
             };
             worker.RunWorkerCompleted += delegate(object sender, RunWorkerCompletedEventArgs e)
             {

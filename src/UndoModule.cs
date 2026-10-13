@@ -20,11 +20,12 @@ namespace TerraNilTrainer
         private readonly List<GameState> history = new List<GameState>();
         private GameController owner;
         private GameState context;
-        private bool enabled, restoring, queued;
+        private bool enabled = true, restoring, queued;
         private int buttonDepth;
-        private string message = "关闭时使用游戏原有的一步撤销。";
+        private string message = "默认已开启：后续可撤销操作会自动累积记录，不设步数上限。";
         public bool Enabled { get { return enabled; } }
         public int Count { get { return history.Count; } }
+        internal bool Restoring { get { return restoring; } }
         public UndoModule(TrainerPlugin plugin) { host = plugin; Active = this; }
         public sealed class RestoreFrame
         {

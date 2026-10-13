@@ -20,7 +20,7 @@ using Type = System.Type;
 
 namespace TerraNilTrainer
 {
-    [BepInPlugin(Id, "伊始之地中文修改器", "1.3.2")]
+    [BepInPlugin(Id, "伊始之地中文修改器", "1.4.0")]
     [BepInProcess("Terra Nil.exe")]
     public sealed class TrainerPlugin : BaseUnityPlugin
     {
@@ -45,6 +45,7 @@ namespace TerraNilTrainer
         private int panelTab;
         private AnimalModule animals;
         private UndoModule undo;
+        private TerrainModule terrain;
         private ConfigEntry<Key> panelKey;
         private ConfigEntry<bool> controlKey, shiftKey, altKey;
         private bool recordingKey;
@@ -65,6 +66,7 @@ namespace TerraNilTrainer
             Instance = this;
             animals = new AnimalModule(this);
             undo = new UndoModule(this);
+            terrain = new TerrainModule(this);
             panelKey = Config.Bind<Key>(ShortcutSettings.Section, ShortcutSettings.MainEntry, Key.F6, "显示或隐藏修改器面板的主按键。");
             controlKey = Config.Bind<bool>(ShortcutSettings.Section, ShortcutSettings.ControlEntry, false, "快捷键是否需要同时按住控制键。");
             shiftKey = Config.Bind<bool>(ShortcutSettings.Section, ShortcutSettings.ShiftEntry, false, "快捷键是否需要同时按住上档键。");
@@ -89,6 +91,8 @@ namespace TerraNilTrainer
                 AddPatch(typeof(SelectionHandler), "PlaceCurrentBuilding", "BlockPlacementPrefix", true);
                 AddPatch(typeof(SelectionHandler), "IsOverUI", "BlockUiAtPositionPrefix", true);
                 AddPatch(typeof(SelectionHandler), "IsPointerOverUIObject", "BlockUiPrefix", true);
+                AddPatch(typeof(SelectionHandler), "Update", "SelectionUpdatePrefix", true, typeof(TerrainModule));
+                AddPatch(typeof(SelectionHandler), "PlaceCurrentBuilding", "PlacementPrefix", true, typeof(TerrainModule));
                 harmony.Patch(AccessTools.DeclaredMethod(typeof(AnimalGroup), "UpdateNeedsAndHappiness"), prefix: new HarmonyMethod(typeof(AnimalModule), "MoodUpdatePrefix"), postfix: new HarmonyMethod(typeof(AnimalModule), "MoodUpdatePostfix"), finalizer: new HarmonyMethod(typeof(AnimalModule), "MoodUpdateFinalizer"));
                 AddPatch(typeof(Data.AnimalGroupData), "CalculateNeedsAndHappiness", "MoodCalculationPostfix", false, typeof(AnimalModule));
                 AddPatch(typeof(AnimalGroup), "GetTerritoryMaxTilesBase", "TerritoryLimitPostfix", false, typeof(AnimalModule), Type.EmptyTypes);
@@ -99,7 +103,7 @@ namespace TerraNilTrainer
                 if (RoverRange == null || HeightCheck == null || RestrictedCheck == null)
                     throw new MissingMemberException("未找到完整的回收或建造判定接口。");
                 Ready = true;
-                status = "版本匹配，建造及动物功能就绪；默认全部关闭。";
+                status = "版本匹配，功能就绪；无限撤销默认开启，其余修改默认关闭。";
                 Logger.LogInfo(status);
                 if (Environment.GetCommandLineArgs().Contains("-trainer-self-test"))
                 {
@@ -243,6 +247,7 @@ namespace TerraNilTrainer
             UpdateRover();
             animals.Update();
             undo.Update();
+            terrain.Update();
         }
         internal void ReportError(Exception error) { Logger.LogError(error); }
         internal void ReportStatus(string message) { Logger.LogInfo(message); }
@@ -318,6 +323,7 @@ namespace TerraNilTrainer
             RestoreRover();
             if (animals != null) animals.Reset();
             if (undo != null) undo.Reset();
+            if (terrain != null) terrain.Reset();
             status = "所有开关已关闭、范围恢复为 1 倍；动物心情恢复按环境计算。已改货币和已完成操作不会回退。";
         }
         private void OnDestroy()
@@ -325,6 +331,7 @@ namespace TerraNilTrainer
             Ready = false;
             if (animals != null) animals.Reset();
             if (undo != null) undo.Reset();
+            if (terrain != null) terrain.Reset();
             RestoreRover();
             if (harmony != null) harmony.UnpatchSelf();
             if (skin != null) Destroy(skin);
@@ -353,6 +360,8 @@ namespace TerraNilTrainer
         {
             if (skin != null) GUI.skin = skin;
             if (animals != null) animals.DrawMarker();
+            if (animals != null) animals.DrawAllHighlights();
+            if (terrain != null) terrain.DrawOverlay();
             if (!Visible)
             {
                 CancelPanelResize();
@@ -393,7 +402,7 @@ namespace TerraNilTrainer
         private void DrawPanel(int id)
         {
             scroll = GUILayout.BeginScrollView(scroll);
-            GUILayout.Label(ShortcutLabel + " 显示/隐藏　｜　面板外正常预览和建造");
+            GUILayout.Label(ShortcutLabel + " 显示/隐藏　｜　" + (terrain != null && terrain.Enabled ? "涂抹模式中，退出涂抹后可建造" : "面板外正常预览和建造"));
             GUILayout.BeginHorizontal();
             GUILayout.Label("拖动边框或四角调整大小，拖动标题移动。");
             if (GUILayout.Button("恢复面板大小", GUILayout.Width(128))) resetPanelQueued = true;
@@ -407,8 +416,19 @@ namespace TerraNilTrainer
             if (GUILayout.Button("恢复默认 F6", GUILayout.Width(150))) { recordingKey = false; SetShortcut(new ShortcutChoice()); }
             GUILayout.EndHorizontal();
             GUILayout.Label(status);
-            int nextTab = GUILayout.Toolbar(panelTab, new string[] { "货币与建造", "动物心情与迁移" });
+            int nextTab = GUILayout.Toolbar(panelTab, new string[] { "货币与建造", "动物心情与迁移", "上帝之手" });
             if (nextTab != panelTab) { panelTab = nextTab; scroll = Vector2.zero; }
+            if (panelTab == 2)
+            {
+                if (terrain != null) terrain.DrawPanel();
+                GUI.enabled = Ready;
+                if (GUILayout.Button("关闭全部修改", GUILayout.Height(36))) ResetAll();
+                GUI.enabled = true;
+                if (GUILayout.Button("隐藏面板（" + ShortcutLabel + " 可重新打开）", GUILayout.Height(36))) Visible = false;
+                GUILayout.EndScrollView();
+                GUI.DragWindow(new Rect(18, 8, panel.width - 36, 20));
+                return;
+            }
             if (panelTab == 1)
             {
                 if (animals != null) animals.DrawPanel();
@@ -578,11 +598,12 @@ namespace TerraNilTrainer
                 return new Rect(p.x * scale, p.y * scale, p.width * scale, p.height * scale);
             }
         }
-        private static bool OverlayContainsScreenPoint(Vector2 point)
+        internal static bool OverlayContainsScreenPoint(Vector2 point)
         {
             if (Instance == null || Screen.width <= 0 || Screen.height <= 0 || Time.frameCount - Instance.lastGuiFrame > 2) return false;
             if (Instance.guiHasCapture || Instance.resizingEdge != PanelEdge.None) return true;
             point.y = Screen.height - point.y;
+            if (Instance.terrain != null && Instance.terrain.Enabled && TerrainModule.StopButton.Contains(point)) return true;
             return Visible ? Instance.panel.Contains(point / GuiScale()) : ReopenButton.Contains(point);
         }
         private static bool BlockPlacementPrefix() { return !PanelBlocksGame(); }

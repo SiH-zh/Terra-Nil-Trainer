@@ -20,7 +20,7 @@ using Type = System.Type;
 
 namespace TerraNilTrainer
 {
-    [BepInPlugin(Id, "伊始之地中文修改器", "1.2.2")]
+    [BepInPlugin(Id, "伊始之地中文修改器", "1.3.0")]
     [BepInProcess("Terra Nil.exe")]
     public sealed class TrainerPlugin : BaseUnityPlugin
     {
@@ -39,6 +39,7 @@ namespace TerraNilTrainer
         private Vector2 scroll;
         private int panelTab;
         private AnimalModule animals;
+        private UndoModule undo;
         private ConfigEntry<Key> panelKey;
         private ConfigEntry<bool> controlKey, shiftKey, altKey;
         private bool recordingKey;
@@ -58,6 +59,7 @@ namespace TerraNilTrainer
         {
             Instance = this;
             animals = new AnimalModule(this);
+            undo = new UndoModule(this);
             panelKey = Config.Bind<Key>(ShortcutSettings.Section, ShortcutSettings.MainEntry, Key.F6, "显示或隐藏修改器面板的主按键。");
             controlKey = Config.Bind<bool>(ShortcutSettings.Section, ShortcutSettings.ControlEntry, false, "快捷键是否需要同时按住控制键。");
             shiftKey = Config.Bind<bool>(ShortcutSettings.Section, ShortcutSettings.ShiftEntry, false, "快捷键是否需要同时按住上档键。");
@@ -84,6 +86,11 @@ namespace TerraNilTrainer
                 AddPatch(typeof(SelectionHandler), "IsPointerOverUIObject", "BlockUiPrefix", true);
                 AddPatch(typeof(Model.AnimalGroup), "UpdateNeedsAndHappiness", "MoodUpdatePostfix", false, typeof(AnimalModule));
                 AddPatch(typeof(Data.AnimalGroupData), "CalculateNeedsAndHappiness", "MoodCalculationPostfix", false, typeof(AnimalModule));
+                AddPatch(typeof(AnimalGroup), "GetTerritoryMaxTilesBase", "TerritoryLimitPostfix", false, typeof(AnimalModule), Type.EmptyTypes);
+                AddPatch(typeof(GameController), "ExecuteCommand", "CommandPostfix", false, typeof(UndoModule));
+                harmony.Patch(AccessTools.DeclaredMethod(typeof(GameController), "UndoPreviousMove"), prefix: new HarmonyMethod(typeof(UndoModule), "UndoPrefix"), postfix: new HarmonyMethod(typeof(UndoModule), "UndoPostfix"), finalizer: new HarmonyMethod(typeof(UndoModule), "UndoFinalizer"));
+                harmony.Patch(AccessTools.DeclaredMethod(typeof(View.Handlers.UIHandler), "PressUndoButton"), prefix: new HarmonyMethod(typeof(UndoModule), "ButtonPrefix"), finalizer: new HarmonyMethod(typeof(UndoModule), "ButtonFinalizer"));
+                AddPatch(typeof(View.Handlers.UIHandler), "SetUndoButtonTweenVisible", "ButtonVisibilityPostfix", false, typeof(UndoModule));
                 if (RoverRange == null || HeightCheck == null || RestrictedCheck == null)
                     throw new MissingMemberException("未找到完整的回收或建造判定接口。");
                 Ready = true;
@@ -114,9 +121,9 @@ namespace TerraNilTrainer
                 Logger.LogError(ex);
             }
         }
-        private void AddPatch(Type type, string name, string hook, bool prefix, Type hookType = null)
+        private void AddPatch(Type type, string name, string hook, bool prefix, Type hookType = null, Type[] parameters = null)
         {
-            MethodInfo method = AccessTools.DeclaredMethod(type, name);
+            MethodInfo method = AccessTools.DeclaredMethod(type, name, parameters);
             if (method == null) throw new MissingMethodException(type.FullName, name);
             HarmonyMethod patch = new HarmonyMethod(hookType ?? typeof(TrainerPlugin), hook);
             if (prefix) harmony.Patch(method, prefix: patch); else harmony.Patch(method, postfix: patch);
@@ -230,7 +237,9 @@ namespace TerraNilTrainer
             }
             UpdateRover();
             animals.Update();
+            undo.Update();
         }
+        internal void ReportError(Exception error) { Logger.LogError(error); }
         public static string ShortcutLabel
         {
             get { return Instance != null && Instance.panelKey != null ? Instance.GetShortcut().Describe() : "F6"; }
@@ -302,12 +311,14 @@ namespace TerraNilTrainer
             recordingKey = false;
             RestoreRover();
             if (animals != null) animals.Reset();
+            if (undo != null) undo.Reset();
             status = "所有开关已关闭、范围恢复为 1 倍；动物心情恢复按环境计算。已改货币和已完成操作不会回退。";
         }
         private void OnDestroy()
         {
             Ready = false;
             if (animals != null) animals.Reset();
+            if (undo != null) undo.Reset();
             RestoreRover();
             if (harmony != null) harmony.UnpatchSelf();
             if (skin != null) Destroy(skin);
@@ -334,10 +345,11 @@ namespace TerraNilTrainer
         }
         private void RenderGui()
         {
+            if (skin != null) GUI.skin = skin;
+            if (animals != null) animals.DrawMarker();
             if (!Visible)
             {
                 if (skin != null) GUI.skin = skin;
-                if (animals != null) animals.DrawMarker();
                 if (GUI.Button(ReopenButton, new GUIContent("打开修改器", "当前快捷键：" + ShortcutLabel))) Visible = true;
                 if (Event.current.type == EventType.Repaint) lastGuiFrame = Time.frameCount;
                 return;
@@ -349,6 +361,7 @@ namespace TerraNilTrainer
                 skin.font = chineseFont;
                 skin.label.fontSize = skin.button.fontSize = skin.toggle.fontSize = skin.textField.fontSize = 17;
                 skin.label.wordWrap = true;
+                skin.box.wordWrap = skin.button.wordWrap = true;
                 skin.button.padding = new RectOffset(8, 8, 6, 6);
                 skin.window.fontSize = 20;
             }
@@ -414,6 +427,8 @@ namespace TerraNilTrainer
             AnyPosition = GUILayout.Toggle(AnyPosition, " 任意位置建造：放宽地形与高度限制", GUILayout.Height(30));
             IgnoreConditions = GUILayout.Toggle(IgnoreConditions, " 忽略建造条件：供电、资源、气候等", GUILayout.Height(30));
             GUILayout.Label("1 倍为原始范围。三个倍率独立，不相乘。\n特殊建筑专属流程、解锁与游戏阶段仍由游戏控制。\n越界和覆盖现有建筑继续拦截；货币仍按原价扣除。");
+            GUILayout.Space(8);
+            if (undo != null) undo.DrawPanel();
             GUILayout.Space(8);
             if (GUILayout.Button("关闭全部修改并恢复原始范围", GUILayout.Height(36))) ResetAll();
             GUI.enabled = true;
@@ -497,6 +512,15 @@ namespace TerraNilTrainer
         private static float GuiScale()
         {
             return Mathf.Max(0.01f, Mathf.Min(1f, Mathf.Min(Screen.width / 560f, Screen.height / 660f)));
+        }
+        internal static Rect VisiblePanelBounds
+        {
+            get
+            {
+                if (!Visible || Instance == null) return new Rect();
+                Rect p = Instance.panel; float scale = GuiScale();
+                return new Rect(p.x * scale, p.y * scale, p.width * scale, p.height * scale);
+            }
         }
         private static bool OverlayContainsScreenPoint(Vector2 point)
         {

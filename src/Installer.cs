@@ -170,7 +170,7 @@ namespace TerraNilTrainer
                     if (Hash(target) != f[1]) throw new IOException("写入校验失败：" + f[0]);
                 }
                 File.WriteAllText(Inside(root, MarkerDirectory + "/安装记录.txt"),
-                    "伊始之地中文修改器 1.2.2\r\n适配构建：22566272\r\n原始游戏代码未替换。\r\n" +
+                    "伊始之地中文修改器 1.3.0\r\n适配构建：22566272\r\n原始游戏代码未替换。\r\n" +
                     "存档备份来源：" + savePath + "\r\n备份文件数：" + saveCount + "\r\n备份目录：" + backup + "\r\n", new UTF8Encoding(true));
                 string loaderResult = ConfigureLoader(root);
                 return "安装完成。照常启动游戏，面板启动时显示。\r\n" + loaderResult + "\r\n" + (saveCount > 0 ? "已备份 " + saveCount + " 个存档文件：\r\n" + backup : "未找到可备份的本地存档；首次游玩通常还没有存档。") + "\r\n全部修改默认关闭。";
@@ -254,7 +254,7 @@ namespace TerraNilTrainer
                 File.Copy(oldManifest, manifest, true);
                 throw;
             }
-            return "插件安装／升级完成。已加入自定义快捷键，保留动物与建造功能。\r\n面板默认使用 F6，可在工具或游戏内设置其他按键。\r\n旧插件、安装记录及找到的当前存档已备份到：\r\n" + backup + "\r\n升级没有替换共享加载框架。";
+            return "插件安装／升级完成。已加入具名种群推荐、全部最佳点地图标记、动物活动范围和无限撤销开关。\r\n面板默认使用 F6，可在工具或游戏内设置其他按键。\r\n旧插件、安装记录及找到的当前存档已备份到：\r\n" + backup + "\r\n升级没有替换共享加载框架。";
         }
         private static void CleanEmptyDirectories(string root, List<string[]> files)
         {
@@ -339,7 +339,7 @@ namespace TerraNilTrainer
         private string Payload { get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "载荷"); } }
         public ManagerForm()
         {
-            Text = "伊始之地 · 中文修改器安装与管理（自定义快捷键版 1.2.2）";
+            Text = "伊始之地 · 中文修改器安装与管理（具名动物与连续撤销版 1.3.0）";
             Font = new Font("Microsoft YaHei UI", 10);
             StartPosition = FormStartPosition.CenterScreen;
             ClientSize = new Size(760, 625);
@@ -366,7 +366,7 @@ namespace TerraNilTrainer
             saveHotkey.Click += delegate { Execute(delegate { return InstallEngine.ConfigureShortcut(folder.Text, Payload, SelectedShortcut()); }); };
             Controls.Add(saveHotkey);
             Controls.Add(new Label { Text = "也可在游戏面板中点击“自定义快捷键”录制。此处保存后，下次启动游戏生效。", Location = new Point(26, 198), Size = new Size(710, 30) });
-            Controls.Add(new Label { Text = "功能：货币、三类范围、建造限制；动物心情拉满、持续保持与迁移位置推荐。\r\n首次安装自动备份存档；已有本工具安装记录时可直接升级插件，保留旧插件备份。", Location = new Point(26, 233), Size = new Size(710, 57) });
+            Controls.Add(new Label { Text = "功能：货币与建造；按种群名字推荐、地图全部最佳点、动物活动范围、无限撤销开关。\r\n首次安装自动备份存档；已有本工具安装记录时可直接升级插件，保留旧插件备份。", Location = new Point(26, 233), Size = new Size(710, 57) });
             checkStatus = new Label { Text = "尚未检查：点击“检查与预览”开始。", Location = new Point(26, 297), Size = new Size(708, 29), Font = new Font(Font, FontStyle.Bold), ForeColor = Color.DimGray };
             Controls.Add(checkStatus);
             info = new TextBox { ReadOnly = true, Multiline = true, ScrollBars = ScrollBars.Vertical, Location = new Point(26, 335), Size = new Size(708, 169), BackColor = Color.White,

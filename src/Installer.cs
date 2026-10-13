@@ -170,7 +170,7 @@ namespace TerraNilTrainer
                     if (Hash(target) != f[1]) throw new IOException("写入校验失败：" + f[0]);
                 }
                 File.WriteAllText(Inside(root, MarkerDirectory + "/安装记录.txt"),
-                    "伊始之地中文修改器 1.4.0\r\n适配构建：22566272\r\n原始游戏代码未替换。\r\n" +
+                    "伊始之地中文修改器 1.4.1\r\n适配构建：22566272\r\n原始游戏代码未替换。\r\n" +
                     "存档备份来源：" + savePath + "\r\n备份文件数：" + saveCount + "\r\n备份目录：" + backup + "\r\n", new UTF8Encoding(true));
                 string loaderResult = ConfigureLoader(root);
                 return "安装完成。照常启动游戏，面板启动时显示。\r\n" + loaderResult + "\r\n" + (saveCount > 0 ? "已备份 " + saveCount + " 个存档文件：\r\n" + backup : "未找到可备份的本地存档；首次游玩通常还没有存档。") + "\r\n无限撤销默认开启，其余修改默认关闭。";
@@ -339,7 +339,7 @@ namespace TerraNilTrainer
         private string Payload { get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "载荷"); } }
         public ManagerForm()
         {
-            Text = "伊始之地 · 中文修改器安装与管理（物种范围与地形涂抹版 1.4.0）";
+            Text = "伊始之地 · 中文修改器安装与管理（动物详情与地块拾取版 1.4.1）";
             Font = new Font("Microsoft YaHei UI", 10);
             StartPosition = FormStartPosition.CenterScreen;
             ClientSize = new Size(760, 625);
@@ -366,7 +366,7 @@ namespace TerraNilTrainer
             saveHotkey.Click += delegate { Execute(delegate { return InstallEngine.ConfigureShortcut(folder.Text, Payload, SelectedShortcut()); }); };
             Controls.Add(saveHotkey);
             Controls.Add(new Label { Text = "也可在游戏面板中点击“自定义快捷键”录制。此处保存后，下次启动游戏生效。", Location = new Point(26, 198), Size = new Size(710, 30) });
-            Controls.Add(new Label { Text = "功能：指定物种范围、地形涂抹、全图动物高亮；无限撤销默认开启。\r\n保留货币与建造、具名动物心情和迁移推荐；安装与升级自动备份。", Location = new Point(26, 233), Size = new Size(710, 57) });
+            Controls.Add(new Label { Text = "功能：动物需求详情内涂抹、地块名称拾取；无限撤销默认开启。\r\n保留货币与建造、具名动物心情和迁移推荐；安装与升级自动备份。", Location = new Point(26, 233), Size = new Size(710, 57) });
             checkStatus = new Label { Text = "尚未检查：点击“检查与预览”开始。", Location = new Point(26, 297), Size = new Size(708, 29), Font = new Font(Font, FontStyle.Bold), ForeColor = Color.DimGray };
             Controls.Add(checkStatus);
             info = new TextBox { ReadOnly = true, Multiline = true, ScrollBars = ScrollBars.Vertical, Location = new Point(26, 335), Size = new Size(708, 169), BackColor = Color.White,

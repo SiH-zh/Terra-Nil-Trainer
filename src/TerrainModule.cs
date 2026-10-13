@@ -35,6 +35,10 @@ namespace TerraNilTrainer
         private GameState strokeState;
         private Vector2Int? previousCenter;
         private bool enabled, drawing, waitRelease;
+        private bool pickerEnabled;
+        private GameState pickedState;
+        private Tile pickedTile;
+        private Vector2 pickerScreen;
         private int selectedChoice = 2, radius = 1;
         private bool square;
         private string filter = "", message = "选择目标地形，开启后在地图上按住左键涂抹；松开提交一笔。";
@@ -43,6 +47,8 @@ namespace TerraNilTrainer
         public bool Enabled { get { return enabled; } }
         public bool Drawing { get { return drawing; } }
         public int PendingCount { get { return pending.Count; } }
+        public bool PickerEnabled { get { return pickerEnabled; } }
+        public string PickedName { get { return pickedTile == null ? "" : TerrainName(pickedTile.type); } }
         public static readonly TerrainChoice[] Choices = new[] {
             new TerrainChoice(TerrainType.Wasteland,"荒地"), new TerrainChoice(TerrainType.Soil,"净化土壤"),
             new TerrainChoice(TerrainType.Greenery,"草地"), new TerrainChoice(TerrainType.Forest,"森林"),
@@ -124,11 +130,15 @@ namespace TerraNilTrainer
                 return;
             }
             CancelStroke(); enabled = value; waitRelease = true;
-            if (value && SelectionHandler.InstanceExists()) SelectionHandler.Instance.DeselectAll();
+            // 需求详情的选择和界面要保留；涂抹期间仍由前缀阻断原地图选择及建筑摆放。
+            if (value && SelectionHandler.InstanceExists() && !(GameController.Instance.CurrentInteractionMode is Lib.InteractionModes.AnimalNeedsInteraction))
+                SelectionHandler.Instance.DeselectAll();
             message = value ? "涂抹已开启：左键拖动，松开提交；右键取消当前笔并退出。" : "涂抹已关闭；未提交的笔画已取消。";
             if (host != null) host.ReportStatus(message);
         }
-        public void Reset() { SetEnabled(false); brushPreview.Clear(); }
+        public void SetPickerEnabled(bool value) { pickerEnabled = value; ClearPickedTile(); }
+        public void Reset() { SetEnabled(false); SetPickerEnabled(false); brushPreview.Clear(); }
+        private void ClearPickedTile() { pickedTile = null; pickedState = null; }
         private void CancelStroke()
         { drawing = false; strokeState = null; previousCenter = null; pending.Clear(); previewPositions.Clear(); }
         public static bool SelectionUpdatePrefix()
@@ -141,33 +151,90 @@ namespace TerraNilTrainer
                 !SelectionHandler.InstanceExists() || !Application.isFocused || Time.timeScale <= 0f) return false;
             if (Menus.PauseMenu.InstanceExists() && Menus.PauseMenu.Instance.IsShown) return false;
             if (TutorialController.InstanceExists() && TutorialController.Instance.TutorialInProgress) return false;
-            return GameController.Instance.CurrentInteractionMode is Lib.InteractionModes.DefaultInteractionMode;
+            return IsSupportedInteractionMode(GameController.Instance.CurrentInteractionMode);
         }
+        public static bool IsSupportedInteractionMode(Lib.InteractionModes.InteractionMode mode)
+        { return mode is Lib.InteractionModes.DefaultInteractionMode || mode is Lib.InteractionModes.AnimalNeedsInteraction; }
         public void Update()
         {
-            if (!enabled) return;
+            ClearPickedTile();
+            if (!enabled && !pickerEnabled) return;
             var mouse = Mouse.current;
             if (mouse == null) { CancelStroke(); return; }
-            if (mouse.rightButton.wasPressedThisFrame) { SetEnabled(false); return; }
+            if (enabled && mouse.rightButton.wasPressedThisFrame) { SetEnabled(false); return; }
             GameState state = TrainerPlugin.CurrentState();
             if (state == null || state.mapState == null || (drawing && !Object.ReferenceEquals(state, strokeState)))
-            { SetEnabled(false); message = "关卡状态已切换，涂抹已退出，未提交的笔画已取消。"; return; }
+            {
+                if (enabled) { SetEnabled(false); message = "关卡状态已切换，涂抹已退出，未提交的笔画已取消。"; }
+                brushPreview.Clear(); return;
+            }
             if (!CanUseScene())
             {
-                SetEnabled(false); brushPreview.Clear();
-                message = "暂停、离开窗口或进入特殊流程：涂抹已退出，未提交笔画已取消。";
+                if (enabled) { SetEnabled(false); message = "暂停、离开窗口或进入特殊流程：涂抹已退出，未提交笔画已取消。"; }
+                brushPreview.Clear();
                 return;
             }
-            if (waitRelease) { if (!mouse.leftButton.isPressed) waitRelease = false; else return; }
             Vector2 screen = mouse.position.ReadValue();
             bool blocked = TrainerPlugin.OverlayContainsScreenPoint(screen) || SelectionHandler.Instance.IsOverUI(screen);
             Tile hovered = null;
             if (!blocked)
             {
                 var view = CursorTile.Invoke(SelectionHandler.Instance, new object[] { screen }) as GameplayTile;
-                if (view != null) hovered = view.UnderlyingTile;
+                if (view != null)
+                {
+                    Tile tile = view.UnderlyingTile;
+                    if (tile != null) hovered = state.mapState.GetTile(tile.x, tile.z);
+                }
             }
+            if (pickerEnabled && hovered != null) { pickedState = state; pickedTile = hovered; pickerScreen = screen; }
+            if (!enabled) return;
+            if (waitRelease) { if (!mouse.leftButton.isPressed) waitRelease = false; else return; }
             ProcessInput(state, hovered, blocked, mouse.leftButton.wasPressedThisFrame, mouse.leftButton.isPressed, mouse.leftButton.wasReleasedThisFrame);
+        }
+        public static string TerrainName(TerrainType type)
+        {
+            TerrainChoice choice = Choices.FirstOrDefault(c => c.Type == type);
+            if (choice != null) return choice.Name;
+            switch (type)
+            {
+                case TerrainType.None: return "空地块";
+                case TerrainType.DirtyOcean: return "污水海洋";
+                case TerrainType.DirtySnow: return "脏雪";
+                case TerrainType.Fissure: return "裂隙";
+                case TerrainType.Lava: return "熔岩";
+                case TerrainType.LavaSource: return "熔岩源";
+                case TerrainType.Concrete: return "混凝土地面";
+                case TerrainType.ConcreteCleanWater: return "积水混凝土地面";
+                case TerrainType.Radiation: return "放射性地块";
+                case TerrainType.Chasm: return "裂谷";
+                case TerrainType.Road: return "道路";
+                case TerrainType.Oil: return "油污地块";
+                case TerrainType.WaterSource: return "水源";
+                case TerrainType.RockyOutcrop: return "岩石露头";
+            }
+            if (StringsController.InstanceExists())
+            {
+                try
+                {
+                    string key = "Type." + type.GetTypeForString() + ".Name";
+                    string text = StringsController.Instance.GetStringOrDefault(key, false);
+                    if (!String.IsNullOrWhiteSpace(text) && text != key)
+                        return System.Text.RegularExpressions.Regex.Replace(text, "<[^>]+>", "").Trim();
+                }
+                catch { /* 本地化服务尚未初始化时使用下方的可读回退。 */ }
+            }
+            return (type.IsBuilding() ? "建筑地块" : "特殊地块") + "（类型编号 " + (int)type + "）";
+        }
+        public static Rect PickerBounds(Vector2 cursor, Vector2 viewport, Vector2 requestedSize)
+        {
+            if (viewport.x <= 0f || viewport.y <= 0f) return new Rect();
+            float mx = Mathf.Min(8f, Mathf.Max(0f, viewport.x * 0.05f)), my = Mathf.Min(8f, Mathf.Max(0f, viewport.y * 0.05f));
+            float width = Mathf.Clamp(requestedSize.x, 1f, Mathf.Max(1f, viewport.x - 2f * mx));
+            float height = Mathf.Clamp(requestedSize.y, 1f, Mathf.Max(1f, viewport.y - 2f * my));
+            float x = cursor.x + 18f, y = cursor.y + 22f;
+            if (x + width > viewport.x - mx) x = cursor.x - width - 18f;
+            if (y + height > viewport.y - my) y = cursor.y - height - 22f;
+            return new Rect(Mathf.Clamp(x, mx, Mathf.Max(mx, viewport.x - mx - width)), Mathf.Clamp(y, my, Mathf.Max(my, viewport.y - my - height)), width, height);
         }
         public void ProcessInput(GameState state, Tile hovered, bool blocked, bool down, bool held, bool released)
         {
@@ -228,6 +295,9 @@ namespace TerraNilTrainer
         public void DrawPanel()
         {
             GUILayout.Label("上帝之手 · 地形涂抹");
+            bool nextPicker = GUILayout.Toggle(pickerEnabled, " 开启地块拾取器（鼠标悬停显示名称）");
+            if (nextPicker != pickerEnabled) SetPickerEnabled(nextPicker);
+            GUILayout.Label("拾取器可单独开启，不改变地形；动物需求详情展开时也能查看和涂抹。");
             GUILayout.Label("目标：" + Choices[selectedChoice].Name + "；状态：" + (enabled ? "涂抹中" : "未开启"));
             GUILayout.Label(message);
             filter = GUILayout.TextField(filter);
@@ -243,10 +313,11 @@ namespace TerraNilTrainer
             GUI.enabled = old && TrainerPlugin.Ready && TrainerPlugin.CurrentState() != null;
             if (GUILayout.Button(enabled ? "退出涂抹" : "开启地形涂抹", GUILayout.Height(36))) SetEnabled(!enabled);
             GUI.enabled = old;
-            GUILayout.Label("左键按住拖动，松开提交整笔；右键取消未提交笔画并退出。菜单可保持展开，点击菜单不会涂抹。\n青色为可涂格，红色为跳过格，黄色为待提交格。每笔作为一步原生撤销。保留原高度，水面显示受高度及关卡规则影响。\n涂抹会按原游戏更新气候、动物需求、进度并自动存档，不消耗或增加叶子。暂停、教程、过场及特殊操作期间不可涂抹。");
+            GUILayout.Label("左键按住拖动，松开提交整笔；右键取消未提交笔画并退出。菜单和动物需求详情可保持展开，在界面上点击不会涂抹。\n青色为可涂格，红色为跳过格，黄色为待提交格。每笔作为一步原生撤销。保留原高度，水面显示受高度及关卡规则影响。\n涂抹会按原游戏更新气候、动物需求、进度并自动存档，不消耗或增加叶子。暂停、教程、过场及特殊操作期间不可涂抹。");
         }
         public void DrawOverlay()
         {
+            DrawPickerOverlay();
             if (!enabled) return;
             if (GUI.Button(StopButton, "涂抹：" + Choices[selectedChoice].Name + " · 右键或点此退出")) SetEnabled(false);
             if (Event.current.type != EventType.Repaint) return;
@@ -267,6 +338,17 @@ namespace TerraNilTrainer
             }
             GUI.color = old;
             GUI.Label(new Rect(12, 98, 450, 28), "本笔待提交 " + pending.Count + " 格 · 松开左键提交");
+        }
+        private void DrawPickerOverlay()
+        {
+            if (!pickerEnabled || pickedTile == null || !Object.ReferenceEquals(pickedState, TrainerPlugin.CurrentState()) || Event.current.type != EventType.Repaint) return;
+            string text = "地块：" + TerrainName(pickedTile.type) + "\n坐标（" + pickedTile.x + ", " + pickedTile.z + "） · 海拔 " + pickedTile.height;
+            var style = new GUIStyle(GUI.skin.box) { alignment = TextAnchor.MiddleLeft, wordWrap = true, richText = false, fontSize = 17, padding = new RectOffset(10, 10, 7, 7) };
+            float width = Mathf.Min(320f, Mathf.Max(1f, Screen.width - 16f));
+            float height = Mathf.Max(56f, style.CalcHeight(new GUIContent(text), width));
+            Rect bounds = PickerBounds(new Vector2(pickerScreen.x, Screen.height - pickerScreen.y), new Vector2(Screen.width, Screen.height), new Vector2(width, height));
+            // 提示只绘制，不创建可点击控件，不吞掉地图或详情界面的鼠标事件。
+            GUI.Box(bounds, text, style);
         }
         private static void DrawPoint(Camera camera, Vector3 world, Color color, float size)
         {

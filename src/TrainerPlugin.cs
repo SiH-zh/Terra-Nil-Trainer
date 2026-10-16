@@ -20,7 +20,7 @@ using Type = System.Type;
 
 namespace TerraNilTrainer
 {
-    [BepInPlugin(Id, "伊始之地中文修改器", "1.4.1")]
+    [BepInPlugin(Id, "伊始之地中文修改器", "1.5.0")]
     [BepInProcess("Terra Nil.exe")]
     public sealed class TrainerPlugin : BaseUnityPlugin
     {
@@ -46,6 +46,7 @@ namespace TerraNilTrainer
         private AnimalModule animals;
         private UndoModule undo;
         private TerrainModule terrain;
+        private ClimateModule climate;
         private ConfigEntry<Key> panelKey;
         private ConfigEntry<bool> controlKey, shiftKey, altKey;
         private bool recordingKey;
@@ -67,6 +68,7 @@ namespace TerraNilTrainer
             animals = new AnimalModule(this);
             undo = new UndoModule(this);
             terrain = new TerrainModule(this);
+            climate = new ClimateModule(this);
             panelKey = Config.Bind<Key>(ShortcutSettings.Section, ShortcutSettings.MainEntry, Key.F6, "显示或隐藏修改器面板的主按键。");
             controlKey = Config.Bind<bool>(ShortcutSettings.Section, ShortcutSettings.ControlEntry, false, "快捷键是否需要同时按住控制键。");
             shiftKey = Config.Bind<bool>(ShortcutSettings.Section, ShortcutSettings.ShiftEntry, false, "快捷键是否需要同时按住上档键。");
@@ -88,6 +90,8 @@ namespace TerraNilTrainer
                 AddPatch(typeof(Model.Buildings.Tier1.Irrigator), "GetArea", "IrrigationPostfix", false);
                 AddPatch(typeof(MapController), "CanPlaceBuildingAtLocation", "PlacementPostfix", false);
                 AddPatch(typeof(Model.Helpers.ClimateEffectivenessHelper), "EvaluateCurrentClimate", "ClimatePrefix", true);
+                AddPatch(typeof(ClimateState), "SetClimateParameter", "SetParameterPrefix", true, typeof(ClimateModule));
+                AddPatch(typeof(ClimateState), "ChangeClimateParameter", "ChangeParameterPrefix", true, typeof(ClimateModule));
                 AddPatch(typeof(SelectionHandler), "PlaceCurrentBuilding", "BlockPlacementPrefix", true);
                 AddPatch(typeof(SelectionHandler), "IsOverUI", "BlockUiAtPositionPrefix", true);
                 AddPatch(typeof(SelectionHandler), "IsPointerOverUIObject", "BlockUiPrefix", true);
@@ -248,6 +252,7 @@ namespace TerraNilTrainer
             animals.Update();
             undo.Update();
             terrain.Update();
+            climate.Update();
         }
         internal void ReportError(Exception error) { Logger.LogError(error); }
         internal void ReportStatus(string message) { Logger.LogInfo(message); }
@@ -324,7 +329,8 @@ namespace TerraNilTrainer
             if (animals != null) animals.Reset();
             if (undo != null) undo.Reset();
             if (terrain != null) terrain.Reset();
-            status = "所有开关已关闭、范围恢复为 1 倍；动物心情恢复按环境计算。已改货币和已完成操作不会回退。";
+            if (climate != null) climate.Reset();
+            status = "所有开关已关闭、范围恢复为 1 倍；动物心情按环境计算，气候恢复自然变化。已改货币和已完成操作不会回退。";
         }
         private void OnDestroy()
         {
@@ -332,6 +338,7 @@ namespace TerraNilTrainer
             if (animals != null) animals.Reset();
             if (undo != null) undo.Reset();
             if (terrain != null) terrain.Reset();
+            if (climate != null) climate.Reset();
             RestoreRover();
             if (harmony != null) harmony.UnpatchSelf();
             if (skin != null) Destroy(skin);
@@ -420,6 +427,7 @@ namespace TerraNilTrainer
             if (nextTab != panelTab) { panelTab = nextTab; scroll = Vector2.zero; }
             if (panelTab == 2)
             {
+                if (climate != null) climate.DrawPanel();
                 if (terrain != null) terrain.DrawPanel();
                 GUI.enabled = Ready;
                 if (GUILayout.Button("关闭全部修改", GUILayout.Height(36))) ResetAll();

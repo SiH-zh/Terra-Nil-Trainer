@@ -11,10 +11,10 @@ namespace TerraNilTrainer
         internal static ClimateModule Active;
         private readonly TrainerPlugin host;
         private GameState context;
-        private readonly int?[] pending = new int?[4];
-        private readonly int?[] targets = new int?[4];
+        private readonly int?[] pending = new int?[Names.Length];
+        private readonly int?[] targets = new int?[Names.Length];
         private string message = "拖动滑块直接设值；操作过的项目会保持，未操作的项目仍自然变化。";
-        public static readonly string[] Names = { "温度", "湿度", "毒性", "辐射" };
+        public static readonly string[] Names = { "温度", "湿度", "毒性", "辐射", "地质稳定性", "大气对流", "土壤盐度" };
 
         public ClimateModule(TrainerPlugin plugin) { host = plugin; Active = this; }
         public static ClimateParameter Parameter(int index)
@@ -25,12 +25,15 @@ namespace TerraNilTrainer
                 case 1: return ClimateParameter.Humidity;
                 case 2: return ClimateParameter.Toxicity;
                 case 3: return ClimateParameter.Radioactivity;
+                case 4: return ClimateParameter.GeologicalStability;
+                case 5: return ClimateParameter.AirConvection;
+                case 6: return ClimateParameter.Salinity;
                 default: return null;
             }
         }
         public static bool Available(GameState state, int index)
         {
-            if (state == null || state.climateState == null || state.climateState.ClimateParameters == null || index < 0 || index >= 4) return false;
+            if (state == null || state.climateState == null || state.climateState.ClimateParameters == null || index < 0 || index >= Names.Length) return false;
             ClimateParameter parameter = Parameter(index);
             return parameter != null && parameter.maxDisplayValue > parameter.minDisplayValue && state.climateState.HasClimateParameter(parameter);
         }
@@ -40,11 +43,11 @@ namespace TerraNilTrainer
         { return Mathf.Clamp(climate.ConvertValue1To1000Range(ClampDisplay(parameter, value), parameter), 0, 1000); }
         public static string DisplayUnit(ClimateParameter parameter)
         { return parameter == null ? "" : System.Text.RegularExpressions.Regex.Replace(parameter.unit ?? "", "<[^>]+>", ""); }
-        public bool IsHeld(int index) { return index >= 0 && index < 4 && targets[index].HasValue; }
+        public bool IsHeld(int index) { return index >= 0 && index < Names.Length && targets[index].HasValue; }
         public void Reset()
         {
             context = null;
-            for (int i = 0; i < 4; i++) { pending[i] = null; targets[i] = null; }
+            for (int i = 0; i < Names.Length; i++) { pending[i] = null; targets[i] = null; }
         }
         public void Observe(GameState state)
         {
@@ -61,7 +64,7 @@ namespace TerraNilTrainer
         }
         public void Release(int index)
         {
-            if (index < 0 || index >= 4) return;
+            if (index < 0 || index >= Names.Length) return;
             pending[index] = null; targets[index] = null;
             message = Names[index] + "已恢复自然变化；已发生的生态变化及完成记录不会回退。";
         }
@@ -70,7 +73,7 @@ namespace TerraNilTrainer
         {
             Observe(state);
             if (state == null) return;
-            for (int i = 0; i < 4; i++)
+            for (int i = 0; i < Names.Length; i++)
             {
                 if (!pending[i].HasValue) continue;
                 int value = pending[i].Value; pending[i] = null;
@@ -97,7 +100,7 @@ namespace TerraNilTrainer
             value = 0f;
             if (!TrainerPlugin.Ready || context == null || !Object.ReferenceEquals(context, TrainerPlugin.CurrentState()) ||
                 !Object.ReferenceEquals(climate, context.climateState)) return false;
-            for (int i = 0; i < 4; i++)
+            for (int i = 0; i < Names.Length; i++)
                 if (targets[i].HasValue && Parameter(i) == parameter && Available(context, i))
                 { value = ToInternal(climate, parameter, targets[i].Value); return true; }
             return false;
@@ -121,7 +124,7 @@ namespace TerraNilTrainer
             GUILayout.Label("上帝之手 · 气候调节");
             GUILayout.Label(message);
             bool original = GUI.enabled;
-            for (int i = 0; i < 4; i++)
+            for (int i = 0; i < Names.Length; i++)
             {
                 bool available = Available(state, i);
                 ClimateParameter parameter = Parameter(i);
@@ -141,8 +144,9 @@ namespace TerraNilTrainer
                 if (available) GUILayout.Label("范围 " + minimum + unit + " ～ " + maximum + unit);
             }
             GUI.enabled = original && TrainerPlugin.Ready;
-            if (GUILayout.Button("全部恢复自然变化")) { Reset(); message = "四项均恢复自然变化；已设置的温湿度从当前值继续变化，毒性和辐射按地图重新计算。"; }
+            if (GUILayout.Button("全部恢复自然变化")) { Reset(); message = "全部恢复自然变化；毒性、辐射和土壤盐度按地图重算，其他参数从当前值继续变化。"; }
             GUI.enabled = original;
+            if (Available(state, 4)) GUILayout.Label("地质稳定性关联原游戏地震流程；调节数值不会暂停地震倒计时，也不撤销地震或重置剧情标记。");
             GUILayout.Label("拖到多少就设为多少，范围及单位与游戏一致。不必开启地形涂抹。毒性和辐射调整全局指标，不会清除地图上的污染地块或辐射源。\n保持仅对当前加载的关卡有效；读档、撤销、切换关卡或关闭全部修改会停止保持。数值随游戏正常存档保存，气候变化可能触发生态效果与条件达成。滑块不计入撤销步骤。");
             GUILayout.Space(10);
         }
